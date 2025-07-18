@@ -1,5 +1,6 @@
 .env
-data/images/
-data/pdfs/
 
 **/__pycache__/
+config.env
+logo.png 
+../knowledge_base/ 
