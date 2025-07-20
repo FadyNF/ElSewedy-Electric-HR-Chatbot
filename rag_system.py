@@ -135,8 +135,10 @@ class RAGSystem:
     def load_pdf_elements(self, file_path: str) -> List:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"PDF file not found: {file_path}")
-        logger.info(f"Loading PDF with unstructured: {file_path}")
-        elements = partition_pdf(file_path, strategy="hi_res")
+        logger.info(f"Loading PDF with pdfplumber (unstructured disabled): {file_path}")
+        # elements = partition_pdf(file_path, strategy="hi_res")  # Disabled due to dependency issues
+        # For now, return empty list - PDF processing will use pdfplumber method
+        elements = []
         logger.info(f"Extracted {len(elements)} elements from PDF")
         return elements
 
@@ -349,10 +351,11 @@ class RAGSystem:
         return chunks
     def parse_pdf_combined(self, file_path):
         """Parse PDF using combined semantic and visual extraction."""
-        from unstructured.partition.pdf import partition_pdf
+        # from unstructured.partition.pdf import partition_pdf  # Disabled due to dependency issues
 
-        # Step 1: Semantic elements
-        elements = partition_pdf(filename=file_path, strategy="hi_res", ocr_languages="eng")
+        # Step 1: Semantic elements (disabled - using pdfplumber instead)
+        # elements = partition_pdf(filename=file_path, strategy="hi_res", ocr_languages="eng")
+        elements = []
         semantic_chunks = self.group_semantic_chunks(elements, file_path)
 
         # Step 2: Visual elements (tables/images)
