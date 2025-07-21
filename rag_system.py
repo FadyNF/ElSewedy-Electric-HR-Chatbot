@@ -28,7 +28,7 @@ class RAGSystem:
     def __init__(self):
         # set variables from environment
         self.embedding_model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
-        self.knowledge_base_dir = os.getenv("KNOWLEDGE_BASE_DIR", "../knowledge_base")
+        self.knowledge_base_dir = os.getenv("KNOWLEDGE_BASE_DIR", "./knowledge_base")
         
         # database configuration
         self.db_config = {
@@ -135,10 +135,8 @@ class RAGSystem:
     def load_pdf_elements(self, file_path: str) -> List:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"PDF file not found: {file_path}")
-        logger.info(f"Loading PDF with pdfplumber (unstructured disabled): {file_path}")
-        # elements = partition_pdf(file_path, strategy="hi_res")  # Disabled due to dependency issues
-        # For now, return empty list - PDF processing will use pdfplumber method
-        elements = []
+        logger.info(f"Loading PDF with unstructured: {file_path}")
+        elements = partition_pdf(file_path, strategy="hi_res", ocr_languages=["eng"])
         logger.info(f"Extracted {len(elements)} elements from PDF")
         return elements
 
@@ -351,11 +349,8 @@ class RAGSystem:
         return chunks
     def parse_pdf_combined(self, file_path):
         """Parse PDF using combined semantic and visual extraction."""
-        # from unstructured.partition.pdf import partition_pdf  # Disabled due to dependency issues
-
-        # Step 1: Semantic elements (disabled - using pdfplumber instead)
-        # elements = partition_pdf(filename=file_path, strategy="hi_res", ocr_languages="eng")
-        elements = []
+        # Step 1: Semantic elements
+        elements = self.load_pdf_elements(file_path)
         semantic_chunks = self.group_semantic_chunks(elements, file_path)
 
         # Step 2: Visual elements (tables/images)
@@ -363,44 +358,6 @@ class RAGSystem:
 
         # Step 3: Combine and return
         return semantic_chunks + visual_chunks
-
-    # def group_semantic_chunks(self, elements, file_path):
-    #     chunks = []
-    #     current_title = "Untitled Section"
-    #     current_content = []
-    #     current_pages = set()
-    #     for el in elements:
-    #         if el.category in ["Header", "Footer"]:
-    #             continue
-    #         text = el.text.strip()
-    #         if not text:
-    #             continue
-    #         # Preprocess: remove >5 newlines and >10 dots in a row
-    #         text = re.sub(r'\n{6,}', '\n', text)
-    #         text = re.sub(r'\.{11,}', '', text)
-    #         if hasattr(el.metadata, 'page_number') and el.metadata.page_number:
-    #             current_pages.add(el.metadata.page_number)
-    #         if el.category == "Title":
-    #             if current_content:
-    #                 chunks.append({
-    #                     "title": current_title,
-    #                     "content": "\n".join(current_content),
-    #                     "source": os.path.basename(file_path),
-    #                     "pages": list(current_pages)
-    #                 })
-    #                 current_content = []
-    #                 current_pages = set()
-    #             current_title = text
-    #         else:
-    #             current_content.append(text)
-    #     if current_content:
-    #         chunks.append({
-    #             "title": current_title,
-    #             "content": "\n".join(current_content),
-    #             "source": os.path.basename(file_path),
-    #             "pages": list(current_pages)
-    #         })
-    #     return chunks
 
     def generate_embeddings(self, texts: List[str]) -> np.ndarray:
         """Generate embeddings for a list of texts."""
