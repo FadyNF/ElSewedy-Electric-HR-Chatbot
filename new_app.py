@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import os
 import shutil
 import logging
@@ -14,6 +15,121 @@ load_dotenv("config.env")
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def inject_arabic_formatting_script():
+    """Inject optimized JavaScript for Arabic text formatting."""
+    script = """
+    <script>
+    const arabicRegex = /[\u0600-\u06FF]/;
+    const latinRegex = /[A-Za-z]/;
+    
+    function isArabic(text) {
+        return arabicRegex.test(text);
+    }
+    
+    function hasMixedContent(text) {
+        return arabicRegex.test(text) && latinRegex.test(text);
+    }
+    
+    function formatChatMessage(messageElement, text) {
+        if (!messageElement || !text) return;
+        
+        // Apply consistent styling for proper text flow
+        Object.assign(messageElement.style, {
+            maxWidth: "100%",
+            boxSizing: "border-box",
+            whiteSpace: "pre-wrap",
+            wordWrap: "break-word",
+            wordBreak: "break-word",
+            overflowWrap: "break-word",
+            display: "block",
+            width: "100%",
+            unicodeBidi: "plaintext",
+            lineHeight: "1.6",
+            textJustify: "inter-word"
+        });
+        
+        if (hasMixedContent(text)) {
+            Object.assign(messageElement.style, {
+                direction: "auto",
+                textAlign: "start"
+            });
+            messageElement.setAttribute("dir", "auto");
+            messageElement.setAttribute("lang", "ar-en");
+        } else if (isArabic(text)) {
+            Object.assign(messageElement.style, {
+                direction: "rtl",
+                textAlign: "right",
+                fontFamily: "'Segoe UI', 'Arial Unicode MS', Arial, sans-serif"
+            });
+            messageElement.setAttribute("dir", "rtl");
+            messageElement.setAttribute("lang", "ar");
+            
+            // Force all child elements to inherit RTL direction
+            const allChildren = messageElement.querySelectorAll('*');
+            allChildren.forEach(child => {
+                child.style.direction = "rtl";
+                child.style.textAlign = "right";
+                child.style.unicodeBidi = "plaintext";
+            });
+        } else {
+            Object.assign(messageElement.style, {
+                direction: "ltr",
+                textAlign: "left"
+            });
+            messageElement.setAttribute("dir", "ltr");
+            messageElement.setAttribute("lang", "en");
+        }
+        
+        // Additional fix for text nodes to ensure proper alignment
+        if (isArabic(text)) {
+            messageElement.style.cssText += "; text-align: right !important; direction: rtl !important;";
+        }
+    }
+    
+    function formatAllMessages() {
+        document.querySelectorAll('.user-message, .assistant-message').forEach(el => {
+            formatChatMessage(el, el.textContent || el.innerText);
+        });
+    }
+    
+    // Initial formatting
+    formatAllMessages();
+    
+    // Optimized observer for new messages
+    const observer = new MutationObserver(function(mutations) {
+        let shouldFormat = false;
+        
+        for (const mutation of mutations) {
+            if (mutation.type === 'childList') {
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType === Node.ELEMENT_NODE && 
+                        (node.querySelector?.('.user-message, .assistant-message') || 
+                         node.classList?.contains('user-message') || 
+                         node.classList?.contains('assistant-message'))) {
+                        shouldFormat = true;
+                        break;
+                    }
+                }
+            }
+            if (shouldFormat) break;
+        }
+        
+        if (shouldFormat) {
+            setTimeout(formatAllMessages, 50);
+        }
+    });
+    
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+    
+    // Reduced frequency fallback
+    setInterval(formatAllMessages, 3000);
+    </script>
+    """
+    components.html(script, height=0)
 
 # Logo handling
 def setup_logo():
@@ -196,28 +312,56 @@ def chat_page():
     logo_path = setup_logo()
     llm_client = get_llm_client()
     
-    # Message styles
+    # Inject Arabic formatting script
+    inject_arabic_formatting_script()
+    
+    # Optimized message styles with enhanced Arabic alignment
     st.markdown("""
     <style>
+    .user-message, .assistant-message {
+        border-radius: 8px;
+        padding: 15px 20px;
+        line-height: 1.6;
+        font-size: 1rem;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+        white-space: pre-wrap;
+        max-width: 100%;
+        box-sizing: border-box;
+        display: block;
+        width: 100%;
+    }
+    
     .user-message {
         background-color: #c0392b;
         color: #fff;
-        border-radius: 8px;
-        padding: 15px 20px;
-        line-height: 1.5;
-        font-size: 1rem;
-        word-wrap: break-word;
     }
+    
     .assistant-message {
         background-color: #f8f9fa;
         color: #222;
-        border-radius: 8px;
-        padding: 15px 20px;
-        line-height: 1.5;
-        font-size: 1rem;
-        word-wrap: break-word;
         border: 1px solid #e0e0e0;
     }
+    
+    /* Simplified Arabic text styling */
+    [dir="rtl"], [lang="ar"] {
+        direction: rtl !important;
+        text-align: right !important;
+        font-family: 'Segoe UI', 'Arial Unicode MS', 'Tahoma', Arial, sans-serif !important;
+    }
+    
+    [dir="rtl"] *, [lang="ar"] * {
+        direction: rtl !important;
+        text-align: right !important;
+        unicode-bidi: embed !important;
+    }
+    
+    /* Chat container optimization */
+    [data-testid="chatMessage"] {
+        max-width: 100% !important;
+        overflow: visible !important;
+    }
+    
     .chat-header {
         background-color: #fff;
         padding: 5px 2px;
@@ -226,9 +370,11 @@ def chat_page():
         display: flex;
         align-items: center;
     }
+    
     div.block-container {
         padding-top: 0rem !important;
     }
+    
     .chat-header h2 {
         color: #c0392b;
         margin: 0;
@@ -248,220 +394,60 @@ def chat_page():
         
       
         
-        # Enhanced button styles
+        # Optimized sidebar styles
         st.markdown("""
         <style>
-        /* Override default Streamlit button styles */
+        /* Sidebar button base styles */
         div[data-testid="stSidebar"] .stButton > button {
             border-radius: 0px !important;
             margin: 0px !important;
-            border: none !important;
+            border: 1px solid transparent !important;
             width: 100% !important;
             text-align: left !important;
             box-shadow: none !important;
             transform: none !important;
             padding: 8px 12px !important;
             font-size: 14px !important;
+            justify-content: flex-start !important;
         }
         
+        /* Button variants */
         div[data-testid="stSidebar"] button[kind="primary"] {
             background-color: #c0392b !important;
             color: white !important;
-            transition: all 0.2s ease !important;
         }
         div[data-testid="stSidebar"] button[kind="primary"]:hover {
             background-color: #a93226 !important;
         }
         div[data-testid="stSidebar"] button[kind="secondary"] {
-            background-color: #f8f9fa !important;
+            background-color: transparent !important;
             color: #333 !important;
-            transition: all 0.2s ease !important;
         }
         div[data-testid="stSidebar"] button[kind="secondary"]:hover {
             background-color: #e9ecef !important;
         }
         
-        /* Remove all gaps and margins */
-        div[data-testid="stSidebar"] .stButton {
-            margin: 0px !important;
-            padding: 0px !important;
-        }
-        
-        div[data-testid="stSidebar"] .row-widget.stHorizontal {
-            gap: 0px !important;
-            margin: 0px !important;
-        }
-        
-        div[data-testid="stSidebar"] [data-testid="column"] {
-            padding: 0px !important;
-            margin: 0px !important;
-        }
-        
-        div[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {
-            gap: 0px !important;
-        }
-        
-        div[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div {
-            padding: 0px !important;
-            margin: 0px !important;
-        }
-        
-        /* Target options buttons by their key pattern */
-        div[data-testid="stSidebar"] button[data-testid*="options_"] {
-            opacity: 0 !important;
-            transition: opacity 0.2s ease !important;
-            background-color: transparent !important;
-            color: #666 !important;
-            font-size: 16px !important;
-            padding: 4px 8px !important;
-            text-align: center !important;
-            width: 30px !important;
-            min-width: 30px !important;
-        }
-        
-        /* Create hover container effect */
-        div[data-testid="stSidebar"] .stHorizontalBlock:hover button[data-testid*="options_"] {
-            opacity: 1 !important;
-        }
-        
-        div[data-testid="stSidebar"] button[data-testid*="options_"]:hover {
-            background-color: rgba(0,0,0,0.1) !important;
-            color: #c0392b !important;
-        }
-        
-        /* Special handling for current session rows */
-        div[data-testid="stSidebar"] .stHorizontalBlock:has(button[kind="primary"]) button[data-testid*="options_"] {
-            color: rgba(255,255,255,0.7) !important;
-        }
-        
-        div[data-testid="stSidebar"] .stHorizontalBlock:has(button[kind="primary"]):hover button[data-testid*="options_"] {
-            background-color: rgba(255,255,255,0.1) !important;
-            color: white !important;
-        }
-        
-        /* Remove padding from expander content */
-        div[data-testid="stSidebar"] .streamlit-expanderContent {
-            padding: 0px !important;
-        }
-        
-        div[data-testid="stSidebar"] .streamlit-expanderContent > div {
-            gap: 0px !important;
-        }
-        
+        /* Remove all spacing */
+        div[data-testid="stSidebar"] .stButton,
+        div[data-testid="stSidebar"] .row-widget.stHorizontal,
+        div[data-testid="stSidebar"] [data-testid="column"],
+        div[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"],
+        div[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div,
+        div[data-testid="stSidebar"] .streamlit-expanderContent,
+        div[data-testid="stSidebar"] .streamlit-expanderContent > div,
         div[data-testid="stSidebar"] .streamlit-expanderContent .element-container {
             margin: 0px !important;
             padding: 0px !important;
+            gap: 0px !important;
         }
         
-        /* Ensure text alignment is left for all buttons */
-        div[data-testid="stSidebar"] button:not([data-testid*="options_"]) {
-            text-align: left !important;
-            justify-content: flex-start !important;
-        }
-        
-        div[data-testid="stSidebar"] button[data-testid*="options_"] {
-            text-align: center !important;
-            justify-content: center !important;
+        /* Seamless expander buttons */
+        div[data-testid="stSidebar"] .streamlit-expanderContent button {
+            margin: -1px 0 !important;
+            border-radius: 0 !important;
         }
         </style>
         """, unsafe_allow_html=True)
-        # Additional CSS overrides for chat history seamless design
-        st.markdown(
-            """
-            <style>
-            /* Transparent secondary buttons */
-            div[data-testid=\"stSidebar\"] .row-widget.stHorizontal button[kind=\"secondary\"] {
-                background-color: transparent !important;
-                border: 1px solid transparent !important;
-            }
-            div[data-testid=\"stSidebar\"] .row-widget.stHorizontal button[kind=\"secondary\"]:hover {
-                background-color: #e9ecef !important;
-            }
-            /* Remove row gaps */
-            div[data-testid=\"stSidebar\"] .row-widget.stHorizontal {
-                gap: 0px !important;
-                margin: 0px !important;
-                padding: 0px !important;
-            }
-            div[data-testid=\"stSidebar\"] .row-widget.stHorizontal > div {
-                margin: 0px !important;
-                padding: 0px !important;
-            }
-            /* Hide 3-dot options by default */
-            div[data-testid=\"stSidebar\"] .row-widget.stHorizontal button[data-testid*=\"options_\"] {
-                opacity: 1 !important;  /* Keep visible but column hidden */
-                background-color: transparent !important;
-                border: none !important;
-            }
-            /* Show on row hover */
-            div[data-testid=\"stSidebar\"] .row-widget.stHorizontal:hover button[data-testid*=\"options_\"] {
-                opacity: 1 !important;
-            }
-            /* Current session row options style */
-            div[data-testid=\"stSidebar\"] .row-widget.stHorizontal:has(button[kind=\"primary\"]) button[data-testid*=\"options_\"] {
-                color: rgba(255,255,255,0.7) !important;
-            }
-            div[data-testid=\"stSidebar\"] .row-widget.stHorizontal:has(button[kind=\"primary\"]):hover button[data-testid*=\"options_\"] {
-                color: rgba(255,255,255,0.9) !important;
-                background-color: rgba(255,255,255,0.1) !important;
-            }
-            /* Make options column zero width until hover */
-            div[data-testid=\"stSidebar\"] .row-widget.stHorizontal > div:nth-child(2) {
-                width: 0 !important;
-                overflow: hidden !important;
-                transition: width 0.2s ease !important;
-            }
-            div[data-testid=\"stSidebar\"] .row-widget.stHorizontal:hover > div:nth-child(2) {
-                width: 30px !important;
-            }
-            /* Ensure options button is fixed width */
-            div[data-testid=\"stSidebar\"] button[data-testid*=\"options_\"] {
-                width: 30px !important;
-                min-width: 30px !important;
-                padding: 8px 0 !important;
-            }
-            /* No left padding for title text */
-            div[data-testid=\"stSidebar\"] button:not([data-testid*=\"options_\"]) {
-                padding-left: 0 !important;
-                text-align: left !important;
-                justify-content: flex-start !important;
-            }
-            /* Ensure transparent borders for all buttons */
-            div[data-testid=\"stSidebar\"] button {
-                border: 1px solid transparent !important;
-            }
-            /* Aggressively remove vertical gaps between rows */
-            div[data-testid=\"stSidebar\"] .streamlit-expanderContent .element-container {
-                padding-top: 0 !important;
-                padding-bottom: 0 !important;
-                margin-top: -1 !important;
-                margin-bottom: -1 !important;
-            }
-            div[data-testid=\"stSidebar\"] .streamlit-expanderContent .element-container > div {
-                padding: 0 !important;
-                margin: 0 !important;
-            }
-            /* Target buttons in expander to remove all spacing */
-            div[data-testid=\"stSidebar\"] .streamlit-expanderContent button {
-                margin-top: -1px !important;  /* Negative margin to pull buttons together */
-                margin-bottom: -1px !important;
-                padding-top: 8px !important;
-                padding-bottom: 8px !important;
-                border-radius: 0 !important;  /* Flat edges for seamless look */
-            }
-            /* Ensure no gaps between element containers */
-            div[data-testid=\"stSidebar\"] .streamlit-expanderContent .element-container + .element-container {
-                margin-top: -2px !important;  /* Overlap if necessary */
-            }
-            /* Remove any inherent Streamlit spacing */
-            div[data-testid=\"stSidebar\"] .streamlit-expanderContent > div > div {
-                row-gap: 0 !important;
-                gap: 0 !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
         
         if st.button("New Chat", type="primary", use_container_width=True):
 
@@ -515,14 +501,18 @@ def chat_page():
                             st.rerun()
     # Main chat area
     st.markdown('<div class="chat-header"><h2>ASK HR!</h2></div>', unsafe_allow_html=True)
-    # Display messages
+    # Display messages with proper formatting
     if not st.session_state.messages:
         with st.chat_message("assistant"):
-            st.markdown('<div class="assistant-message">Welcome to HR Support! I can answer questions about company policies, dress code, and HR-related matters. How can I assist you today?</div>', unsafe_allow_html=True)
-    for message in st.session_state.messages:
+            welcome_msg = 'Welcome to HR Support! I can answer questions about company policies, dress code, and HR-related matters. How can I assist you today?'
+            st.markdown(f'<div class="assistant-message" id="welcome-msg">{welcome_msg}</div>', unsafe_allow_html=True)
+            
+    for i, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
             class_name = "user-message" if message["role"] == "user" else "assistant-message"
-            st.markdown(f'<div class="{class_name}">{message["content"]}</div>', unsafe_allow_html=True)
+            msg_id = f"msg-{i}-{message['role']}"
+            st.markdown(f'<div class="{class_name}" id="{msg_id}">{message["content"]}</div>', unsafe_allow_html=True)
+    
     # Handle FAQ prompt with streaming
     if hasattr(st.session_state, 'faq_prompt') and st.session_state.faq_prompt:
         prompt = st.session_state.faq_prompt
@@ -542,10 +532,14 @@ def chat_page():
             with st.spinner("Thinking..."):
                 result = llm_client.chat(st.session_state.current_session_id, prompt, stream=True)
                 full_response = ""
+                response_id = f"streaming-response-{len(st.session_state.messages)}"
                 for chunk in result['stream']:
                     full_response += chunk
-                    message_placeholder.markdown(f'<div class="assistant-message">{full_response + "▌"}</div>', unsafe_allow_html=True)
-                message_placeholder.markdown(f'<div class="assistant-message">{full_response}</div>', unsafe_allow_html=True)
+                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}">{full_response + "▌"}</div>', unsafe_allow_html=True)
+                
+                # Final message without cursor
+                final_id = f"{response_id}-final"
+                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}">{full_response}</div>', unsafe_allow_html=True)
         
         st.session_state.messages.append({"role": "assistant", "content": full_response})
         
@@ -565,10 +559,15 @@ def chat_page():
             with st.spinner("Thinking..."):
                 result = llm_client.chat(st.session_state.current_session_id, prompt, stream=True)
                 full_response = ""
+                response_id = f"chat-streaming-response-{len(st.session_state.messages)}"
                 for chunk in result['stream']:
                     full_response += chunk
-                    message_placeholder.markdown(f'<div class="assistant-message">{full_response + "▌"}</div>', unsafe_allow_html=True)
-                message_placeholder.markdown(f'<div class="assistant-message">{full_response}</div>', unsafe_allow_html=True)
+                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}">{full_response + "▌"}</div>', unsafe_allow_html=True)
+                
+                # Final message without cursor
+                final_id = f"{response_id}-final"
+                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}">{full_response}</div>', unsafe_allow_html=True)
+                
         
         st.session_state.messages.append({"role": "assistant", "content": full_response})
         
