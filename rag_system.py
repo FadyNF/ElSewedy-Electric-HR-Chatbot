@@ -13,7 +13,6 @@ import uuid
 import pdfplumber
 import pytesseract
 from PIL import Image
-from transformers import BlipProcessor, BlipForConditionalGeneration, DonutProcessor, VisionEncoderDecoderModel
 
 # Load environment variables
 load_dotenv("config.env")
@@ -183,7 +182,7 @@ class RAGSystem:
             # Clean up the text and page info
             page = el.metadata.page_number or 1
 
-            # Skip "Contents" section — common in PDFs
+            # Skip "Contents" section — common in PDFs with no use for rag 
             if category == "Title" and text.lower().strip() in ["contents", "table of contents"]:
                 continue
 
@@ -200,7 +199,7 @@ class RAGSystem:
                 current_subsection = None
                 continue
 
-            # Optional: Detect and handle subsections (e.g., by pattern or category)
+            # Detect and handle subsections (e.g., by pattern or category)
             if category in ["SectionHeader", "Heading"]:
                 save_current_subsection()
                 current_subsection = {
@@ -218,47 +217,36 @@ class RAGSystem:
                 current_section["content"].append(text)
                 current_section["page_numbers"].add(page)
 
-        # Save the last chunk
+        # Save  last chunk
         save_current_subsection()
         save_current_section()
 
         return chunks
-    def summarize_table(self, rows, max_rows=5):
+    def summarize_table(self, rows, max_rows=15): 
         if not rows:
             return "No rows found."
 
         headers = list(rows[0].keys())
         lines = [" | ".join(headers), " | ".join(["---"] * len(headers))]
 
+        
+        effective_max = max_rows if len(rows) > max_rows else len(rows)
+        
         for i, row in enumerate(rows):
-            if i >= max_rows:
-                lines.append("...and more rows.")
+            if i >= effective_max:
+                remaining = len(rows) - effective_max
+                lines.append(f"...and {remaining} more rows.")
                 break
             line = " | ".join(row.get(h, "") for h in headers)
             lines.append(line)
 
         return "\n".join(lines)
     def extract_tables_and_images(self, elements, file_path):
-        blip_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-        blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to("cpu")
-
-        donut_processor = DonutProcessor.from_pretrained("naver-clova-ix/donut-base-finetuned-docvqa")
-        donut_model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base-finetuned-docvqa").to("cpu")
-
-        def generate_blip_caption(image: Image.Image) -> str:
-            inputs = blip_processor(image, return_tensors="pt").to("cpu")
-            out = blip_model.generate(**inputs, max_new_tokens=30)
-            return blip_processor.decode(out[0], skip_special_tokens=True)
-
-        def run_donut(image: Image.Image, prompt: str = "What does this table or image contain?") -> str:
-            task_prompt = f"<s_docvqa><s_question>{prompt}</s_question><s_answer>"
-            inputs = donut_processor(image, task_prompt, return_tensors="pt").to("cpu")
-            outputs = donut_model.generate(**inputs, max_length=512)
-            return donut_processor.batch_decode(outputs, skip_special_tokens=True)[0]
-
+        """Simple table and image extraction using only tesseract OCR."""
         chunks = []
         doc_name = os.path.basename(file_path)
 
+        # Get page titles for context
         page_titles = {}
         for el in elements:
             if el.category == "Title" and el.metadata and el.metadata.page_number:
@@ -268,23 +256,31 @@ class RAGSystem:
         with pdfplumber.open(file_path) as pdf:
             for i, page in enumerate(pdf.pages):
                 page_num = i + 1
-                found_table = False
 
+                # Extract tables using pdfplumber only
                 try:
                     tables = page.extract_tables()
-                    print(f"[PDF Page {page_num}] Found {len(tables)} tables")
+                    if tables:
+                        logger.info(f"[PDF Page {page_num}] Found {len(tables)} tables")
 
                     for table in tables:
-                        if table and len(table) > 1:
-                            found_table = True
-                            headers = table[0]
-                            rows = table[1:]
+                        if not table or len(table) <= 1:
+                            continue
+                            
+                        headers = table[0] if table[0] else []
+                        rows = table[1:]
 
-                            structured_data = []
-                            for row in rows:
-                                record = {headers[i]: (cell or "-") for i, cell in enumerate(row) if i < len(headers)}
+                        # Create structured data with null handling
+                        structured_data = []
+                        for row in rows:
+                            if row:  # Skip empty rows
+                                record = {}
+                                for col_idx, cell in enumerate(row):
+                                    header = headers[col_idx] if col_idx < len(headers) and headers[col_idx] else f"Column_{col_idx+1}"
+                                    record[header] = str(cell).strip() if cell else "-"
                                 structured_data.append(record)
 
+                        if structured_data:  # Only add if we have valid data
                             title_texts = page_titles.get(page_num, [])
                             title = title_texts[-1] if title_texts else f"Table (Page {page_num})"
 
@@ -298,53 +294,34 @@ class RAGSystem:
                                 "source": doc_name
                             })
                 except Exception as e:
-                    print(f"[Warning] Table extraction failed on page {page_num}: {e}")
+                    logger.warning(f"Table extraction failed on page {page_num}: {e}")
 
-                if not found_table:
-                    try:
-                        full_image = page.to_image(resolution=300).original.convert("RGB")
-                        donut_caption = run_donut(full_image, "What does the table or image on this page contain?")
-                        if donut_caption.strip():
-                            chunks.append({
-                                "chunk_id": str(uuid.uuid4()),
-                                "title": f"Visual Summary (Page {page_num})",
-                                "type": "image-table",
-                                "caption": donut_caption,
-                                "page_numbers": [page_num],
-                                "source": doc_name
-                            })
-                    except Exception as e:
-                        print(f"[Warning] Donut failed on page {page_num}: {e}")
-
+                # Simple image OCR with tesseract 
                 try:
                     for img_dict in page.images:
                         x0, top, x1, bottom = img_dict["x0"], img_dict["top"], img_dict["x1"], img_dict["bottom"]
-                        cropped_image = page.to_image(resolution=300).original.crop((x0, top, x1, bottom)).convert("RGB")
-
-                        ocr_caption = pytesseract.image_to_string(cropped_image).strip()
-                        blip_caption = None
-
-                        if len(ocr_caption) < 10:
-                            try:
-                                blip_caption = generate_blip_caption(cropped_image)
-                            except:
-                                blip_caption = "[BLIP failed]"
-
-                        final_caption = blip_caption or ocr_caption or "[No caption detected]"
-
-                        chunks.append({
-                            "chunk_id": str(uuid.uuid4()),
-                            "title": f"Image (Page {page_num})",
-                            "type": "image",
-                            "caption": final_caption,
-                            "ocr_caption": ocr_caption,
-                            "blip_caption": blip_caption,
-                            "page_numbers": [page_num],
-                            "source": doc_name
-                        })
+                        
+                        # Skip small images (logos, decorative elements)
+                        width, height = x1 - x0, bottom - top
+                        if width < 100 or height < 100:
+                            continue
+                            
+                        cropped_image = page.to_image(resolution=150).original.crop((x0, top, x1, bottom)).convert("RGB")
+                        ocr_text = pytesseract.image_to_string(cropped_image).strip()
+                        
+                        # Only add if OCR found meaningful text
+                        if len(ocr_text) > 15:
+                            chunks.append({
+                                "chunk_id": str(uuid.uuid4()),
+                                "title": f"Image Text (Page {page_num})",
+                                "type": "image",
+                                "content": ocr_text,
+                                "page_numbers": [page_num],
+                                "source": doc_name
+                            })
 
                 except Exception as e:
-                    print(f"[Warning] Image OCR/Captioning failed on page {page_num}: {e}")
+                    logger.warning(f"Image OCR failed on page {page_num}: {e}")
 
         return chunks
     def parse_pdf_combined(self, file_path):
@@ -540,12 +517,11 @@ class RAGSystem:
         
         return "", max_similarity
 
-
 if __name__ == "__main__":
     # Test the RAG system
     rag = RAGSystem()
     
-    # Build index
+    # Build index (automatically overwrites existing embeddings per file)
     rag.build_index()
     
     # Test search

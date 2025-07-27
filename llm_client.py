@@ -9,6 +9,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import warnings
 from rag_system import RAGSystem
+import re
 
 # Load environment variables
 load_dotenv("config.env")
@@ -23,8 +24,8 @@ class LLMClient:
     def __init__(self):
         # LLM Configuration
         self.api_key = os.getenv("API_KEY")
-        self.model = os.getenv("MODEL", "gpt-4o")
-        self.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.55"))
+        self.model = os.getenv("MODEL", "gpt-4o-mini")
+        self.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.6"))
         
         # database configuration
         self.db_config = {
@@ -37,25 +38,54 @@ class LLMClient:
         
         # initialize clients (we can change this depending on what API we use. qwen-3 is fine but needs a change in system prompt.)
         self.client = OpenAI(
-            api_key=self.api_key)
+            base_url="https://models.inference.ai.azure.com",
+            api_key=self.api_key
+        )
         
         # initialize RAG system
         self.rag_system = RAGSystem()
         
         # System prompt
         self.system_prompt = (
-    "You are an HR Assistant for Elsewedy Electric. Answer ONLY based on the provided policy context below when relevant context is available and mention source of the answer if availbale. If no context is provided or the context doesn't contain the answer or it is not in system prompt,Ask a followup question to the user to provide more information while guiding them to the right prompt. If the user doesn't provide more information, say 'I don't have that information in the provided policies.' Do not use any external knowledge about Elsewedy or any other company policies not explicitly provided in the context.\n\n"
-    "Here are some examples:\n\n"
-    "Example 1:\n"
-    "Question: What is the dress code for office employees at Elsewedy Electric?\n"
-    "Answer: Based on the Dress Code & Personal Appearance Policy, for offices, employees are required to wear formal or semi-formal attire, including suits, jackets, shirts, skirts, and pants typical of formal business attire. All clothing should be neat, without tears,revealing, rips, or holes, and should not be revealing or have offensive stamps or prints. On Thursdays, smart casual wear is accepted, including jeans, polo shirts, t-shirts (no drawings), and sneakers, but slippers, shorts, ripped jeans, and sportswear are not allowed. Females are allowed to wear jewelry, but visible body piercings are not permitted during working hours. Employees must maintain personal hygiene, including neat haircuts, trimmed beards, and proper nail care. (Source: Dress Code & Personal Appearance Policy)\n\n"
-    "Example 2:\n"
-    "Question: What are the criteria for band promotion at Elsewedy Electric?\n"
-    "Answer: According to the Promotion Policy, band promotion is an upward move from one band to another and requires the employee to be a confirmed High Potential (HIPO) as identified through the Talent Review Meeting (TRM) and the Group Talent Assessment Center (TAC). The criteria include: 1. Approved organization structure. 2. Available job at the requested grade. 3. Available budget. 4. The readiness of the nominated employee (confirmed HIPO). 5. Approval of the Sector/BU Head. Additionally, for leadership band jobs, approval from the Group CHRO and Group CEO is required. (Source: Promotion Policy)\""
-    "Example 3:\n"
-    "Question: What is AI?\n"
-    "Answer: Artificial Intelligence (AI) is the use of machines to perform tasks that normally require human intelligence—like learning, decision-making, and pattern recognition. For businesses, AI drives efficiency, automates processes, and supports smarter, data-driven decisions."
-    )
+            "You are an HR Assistant for Elsewedy Electric, your primary role is to answer questions based on the provided company policies. When relevant policy context is available, use it to respond and cite the source. If no relevant context is provided for a specific question, state, I don’t have that information in the provided policies. DO NOT USE external knowledge about Elsewedy or other companies not explicitly provided in the context. For general questions unrelated to Elsewedy Electric’s policies, you can respond as a helpful chatbot using your available knowledge and tools, ensuring accurate and concise answers.\n\n"
+            
+            "LANGUAGE HANDLING:\n"
+            "- If spoken to in Arabic (العربية), respond in Arabic\n"
+            "- If spoken to in English, respond in English\n"
+            "- Search for policy information in both Arabic and English content\n"
+            "- When citing sources, use the original policy name as it appears in the document\n"
+            "- If a policy name is mentioned in Arabic, search for both Arabic and English versions\n\n"
+            
+            "EXAMPLES:\n\n"
+            
+            "English Example 1:\n"
+            "Question: What is the dress code for office employees at Elsewedy Electric?\n"
+            "Answer: Based on the Dress Code & Personal Appearance Policy, for offices, employees are required to wear formal or semi-formal attire, including suits, jackets, shirts, skirts, and pants typical of formal business attire. All clothing should be neat, without tears, revealing, rips, or holes, and should not be revealing or have offensive stamps or prints. On Thursdays, smart casual wear is accepted, including jeans, polo shirts, t-shirts (no drawings), and sneakers, but slippers, shorts, ripped jeans, and sportswear are not allowed. Females are allowed to wear jewelry, but visible body piercings are not permitted during working hours. Employees must maintain personal hygiene, including neat haircuts, trimmed beards, and proper nail care. (Source: Dress Code & Personal Appearance Policy)\n\n"
+            
+            "English Example 2:\n"
+            "Question: What are the criteria for band promotion at Elsewedy Electric?\n"
+            "Answer: According to the Promotion Policy, band promotion is an upward move from one band to another and requires the employee to be a confirmed High Potential (HIPO) as identified through the Talent Review Meeting (TRM) and the Group Talent Assessment Center (TAC). The criteria include: 1. Approved organization structure. 2. Available job at the requested grade. 3. Available budget. 4. The readiness of the nominated employee (confirmed HIPO). 5. Approval of the Sector/BU Head. Additionally, for leadership band jobs, approval from the Group CHRO and Group CEO is required. (Source: Promotion Policy)\n\n"
+            
+            "Arabic Example 1:\n"
+            "السؤال: إيه هي سياسة السلف في الشركة؟\n"
+            "الإجابة: بناءً على سياسة سلف العاملين، يحق للموظفين الحصول على سلف وفقاً للشروط والأحكام المحددة في السياسة. يجب تقديم طلب السلفة وفقاً للإجراءات المعتمدة والحصول على الموافقات اللازمة من الإدارة المختصة. (المصدر: سياسة سلف العاملين)\n\n"
+            
+            "Arabic Example 2:\n"
+            "السؤال: اعمل ايه عشان اترقي؟\n"
+            "الإجابة: وفقاً لسياسة الترقيات، الترقية في الدرجة الوظيفية تتطلب أن يكون الموظف مؤهل ومحدد كموظف عالي الإمكانات (HIPO) من خلال اجتماع مراجعة المواهب ومركز تقييم المواهب. المعايير تشمل: ١. هيكل تنظيمي معتمد ٢. وظيفة متاحة في الدرجة المطلوبة ٣. ميزانية متاحة ٤. جاهزية الموظف المرشح ٥. موافقة رئيس القطاع/وحدة العمل. (المصدر: سياسة الترقيات)\n\n"
+            
+            "General Knowledge Example:\n"
+            "Question: What is AI?\n"
+            "Answer: Artificial Intelligence (AI) is the use of machines to perform tasks that normally require human intelligence—like learning, decision-making, and pattern recognition. For businesses, AI drives efficiency, automates processes, and supports smarter, data-driven decisions.\n\n"
+            
+            "No Context Example:\n"
+            "Question: What is the vacation policy for contractors?\n"
+            "Answer: I don't have specific information about vacation policies for contractors in the provided policies. Could you clarify if you're another policy or a different question?\n\n"
+            
+            "Arabic No Context Example:\n"
+            "السؤال: إيه هي سياسة الإجازات للمقاولين؟\n"
+            "الإجابة: مش عندي معلومات محددة عن سياسة الإجازات للمقاولين في السياسات المتاحة. ممكن توضح لو بتسأل عن سياسة مختلفة؟"
+        )
         
     def _get_connection(self):
         """Get database connection."""
@@ -180,22 +210,53 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Error updating session title: {e}")
     
-    def decide_rag_usage(self, query: str) -> Tuple[bool, str, float]:
-        """Decide whether to use RAG based on similarity score."""
-        rag_context, max_similarity = self.rag_system.get_rag_context(query, self.similarity_threshold)
+    def decide_rag_usage(self, query: str) -> Tuple[bool, str, float, str]:
+        """Decide whether to use RAG based on similarity score, with Arabic query translation."""
+        translated_query = query  # Default to original
+        
+        # Detect if query is Arabic
+        if self.is_arabic(query):
+            # Translate to English for better RAG matching with English policies
+            translated_query = self.translate_to_english(query)
+            logger.info(f"Translated Arabic query: '{query}' to English: '{translated_query}'")
+        
+        rag_context, max_similarity = self.rag_system.get_rag_context(translated_query, self.similarity_threshold)
         use_rag = max_similarity >= self.similarity_threshold
         
         logger.info(f"Query similarity: {max_similarity:.3f}, Threshold: {self.similarity_threshold}, Use RAG: {use_rag}")
         
-        return use_rag, rag_context, max_similarity
+        return use_rag, rag_context, max_similarity, translated_query
+    
+    def is_arabic(self, text: str) -> bool:
+        """Simple Arabic detection."""
+        arabic_pattern = r'[\u0600-\u06FF]'
+        return bool(re.search(arabic_pattern, text))
+    
+    def translate_to_english(self, text: str) -> str:
+        """Translate text to English using the LLM."""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a translator. Translate the following Egyptian Arabic text to English accurately, preserving HR policy terms."},
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.3,
+                max_tokens=1500
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Translation error: {e}")
+            return text  # Fallback to original
     
     def generate_response(self, query: str, conversation_history: List[Dict] = None, stream: bool = False) -> Tuple[Union[str, Callable[[], Generator[str, None, None]]], str, float]:
         """Generate response using LLM with optional RAG context, optionally streaming."""
-        use_rag, rag_context, similarity_score = self.decide_rag_usage(query)
+        use_rag, rag_context, similarity_score, translated_query = self.decide_rag_usage(query)
         messages = []
 
         if use_rag and rag_context:
             system_message = f"{self.system_prompt}\n\nContext from company policies:\n{rag_context}"
+            logger.info(f"🔍 RAG Context being sent to LLM (similarity: {similarity_score:.3f}):\n{rag_context[:200]}...")
         else:
             system_message = self.system_prompt
 
@@ -225,8 +286,8 @@ class LLMClient:
             if stream:
                 def generator():
                     for chunk in stream_obj:
-                        content = getattr(chunk.choices[0].delta, "content", None) or ""
-                        yield content
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            yield chunk.choices[0].delta.content
                 return generator, rag_context if use_rag else "", similarity_score
             else:
                 response_chunks = []
@@ -249,7 +310,12 @@ class LLMClient:
                 "I'm sorry, I'm having trouble connecting to the language model. "
                 "Please ensure the service is running and try again."
             )
-            return error_response, "", 0.0
+            if stream:
+                def error_generator():
+                    yield error_response
+                return error_generator, "", 0.0
+            else:
+                return error_response, "", 0.0
     
     def chat(self, session_id: str, user_message: str, stream: bool = False) -> Dict:
         """Handle chat interaction with optional streaming."""
@@ -274,10 +340,15 @@ class LLMClient:
             if stream:
                 def saving_generator():
                     chunks = []
-                    gen = gen_or_resp()  # Call the generator function
-                    for chunk in gen:
-                        chunks.append(chunk)
-                        yield chunk
+                    if callable(gen_or_resp):
+                        gen = gen_or_resp()  # Call the generator function
+                        for chunk in gen:
+                            chunks.append(chunk)
+                            yield chunk
+                    else:
+                        # Handle error case where gen_or_resp is already a string
+                        chunks.append(gen_or_resp)
+                        yield gen_or_resp
                     full_response = "".join(chunks)
                     self.save_message(session_id, "assistant", full_response, rag_context if used_rag else None, similarity_score)
                 
