@@ -16,78 +16,53 @@ load_dotenv("config.env")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def is_arabic_text(text):
+    """Check if text contains Arabic characters."""
+    import re
+    arabic_pattern = re.compile(r'[\u0600-\u06FF]')
+    return bool(arabic_pattern.search(text))
+
+def get_message_style(text):
+    """Get inline style for message based on language."""
+    if is_arabic_text(text):
+        return 'direction: rtl; text-align: right; font-family: "Segoe UI", "Arial Unicode MS", "Tahoma", Arial, sans-serif; unicode-bidi: bidi-override;'
+    else:
+        return 'direction: ltr; text-align: left;'
+
 def inject_arabic_formatting_script():
     """Inject optimized JavaScript for Arabic text formatting."""
     script = """
     <script>
-    const arabicRegex = /[\u0600-\u06FF]/;
-    const latinRegex = /[A-Za-z]/;
-    
     function isArabic(text) {
+        const arabicRegex = /[\u0600-\u06FF]/;
         return arabicRegex.test(text);
     }
-    
-    function hasMixedContent(text) {
-        return arabicRegex.test(text) && latinRegex.test(text);
-    }
-    
+
     function formatChatMessage(messageElement, text) {
-        if (!messageElement || !text) return;
-        
-        // Apply consistent styling for proper text flow
-        Object.assign(messageElement.style, {
-            maxWidth: "100%",
-            boxSizing: "border-box",
-            whiteSpace: "pre-wrap",
-            wordWrap: "break-word",
-            wordBreak: "break-word",
-            overflowWrap: "break-word",
-            display: "block",
-            width: "100%",
-            unicodeBidi: "plaintext",
-            lineHeight: "1.6",
-            textJustify: "inter-word"
-        });
-        
-        if (hasMixedContent(text)) {
-            Object.assign(messageElement.style, {
-                direction: "auto",
-                textAlign: "start"
-            });
-            messageElement.setAttribute("dir", "auto");
-            messageElement.setAttribute("lang", "ar-en");
-        } else if (isArabic(text)) {
-            Object.assign(messageElement.style, {
-                direction: "rtl",
-                textAlign: "right",
-                fontFamily: "'Segoe UI', 'Arial Unicode MS', Arial, sans-serif"
-            });
+        if (isArabic(text)) {
+            messageElement.classList.add("arabic-text");
             messageElement.setAttribute("dir", "rtl");
             messageElement.setAttribute("lang", "ar");
-            
-            // Force all child elements to inherit RTL direction
-            const allChildren = messageElement.querySelectorAll('*');
-            allChildren.forEach(child => {
-                child.style.direction = "rtl";
-                child.style.textAlign = "right";
-                child.style.unicodeBidi = "plaintext";
-            });
+            messageElement.style.direction = "rtl";
+            messageElement.style.textAlign = "right";
+            messageElement.style.unicodeBidi = "bidi-override";
         } else {
-            Object.assign(messageElement.style, {
-                direction: "ltr",
-                textAlign: "left"
-            });
+            messageElement.classList.remove("arabic-text");
             messageElement.setAttribute("dir", "ltr");
             messageElement.setAttribute("lang", "en");
-        }
-        
-        // Additional fix for text nodes to ensure proper alignment
-        if (isArabic(text)) {
-            messageElement.style.cssText += "; text-align: right !important; direction: rtl !important;";
+            messageElement.style.direction = "ltr";
+            messageElement.style.textAlign = "left";
+            messageElement.style.unicodeBidi = "normal";
         }
     }
     
     function formatAllMessages() {
+        // Target Streamlit chat message containers
+        document.querySelectorAll('[data-testid="chatMessage"] .user-message, [data-testid="chatMessage"] .assistant-message').forEach(el => {
+            formatChatMessage(el, el.textContent || el.innerText);
+        });
+        
+        // Also target direct message containers
         document.querySelectorAll('.user-message, .assistant-message').forEach(el => {
             formatChatMessage(el, el.textContent || el.innerText);
         });
@@ -96,28 +71,27 @@ def inject_arabic_formatting_script():
     // Initial formatting
     formatAllMessages();
     
-    // Optimized observer for new messages
+    // Observer for new messages
     const observer = new MutationObserver(function(mutations) {
-        let shouldFormat = false;
-        
-        for (const mutation of mutations) {
+        mutations.forEach(function(mutation) {
             if (mutation.type === 'childList') {
-                for (const node of mutation.addedNodes) {
-                    if (node.nodeType === Node.ELEMENT_NODE && 
-                        (node.querySelector?.('.user-message, .assistant-message') || 
-                         node.classList?.contains('user-message') || 
-                         node.classList?.contains('assistant-message'))) {
-                        shouldFormat = true;
-                        break;
+                mutation.addedNodes.forEach(function(node) {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        // Check for Streamlit chat message containers
+                        const streamlitMessages = node.querySelectorAll('[data-testid="chatMessage"] .user-message, [data-testid="chatMessage"] .assistant-message');
+                        streamlitMessages.forEach(function(message) {
+                            formatChatMessage(message, message.textContent || message.innerText);
+                        });
+                        
+                        // Check for direct message containers
+                        const directMessages = node.querySelectorAll('.user-message, .assistant-message');
+                        directMessages.forEach(function(message) {
+                            formatChatMessage(message, message.textContent || message.innerText);
+                        });
                     }
-                }
+                });
             }
-            if (shouldFormat) break;
-        }
-        
-        if (shouldFormat) {
-            setTimeout(formatAllMessages, 50);
-        }
+        });
     });
     
     observer.observe(document.body, {
@@ -125,8 +99,8 @@ def inject_arabic_formatting_script():
         subtree: true
     });
     
-    // Reduced frequency fallback
-    setInterval(formatAllMessages, 3000);
+    // More frequent fallback for Streamlit's dynamic rendering
+    setInterval(formatAllMessages, 1000);
     </script>
     """
     components.html(script, height=0)
@@ -321,15 +295,16 @@ def chat_page():
     .user-message, .assistant-message {
         border-radius: 8px;
         padding: 15px 20px;
-        line-height: 1.6;
+        line-height: 1.4;
         font-size: 1rem;
         word-wrap: break-word;
         overflow-wrap: break-word;
-        white-space: pre-wrap;
+        white-space: normal;
         max-width: 100%;
         box-sizing: border-box;
         display: block;
         width: 100%;
+        margin: 0;
     }
     
     .user-message {
@@ -343,17 +318,65 @@ def chat_page():
         border: 1px solid #e0e0e0;
     }
     
-    /* Simplified Arabic text styling */
+    /* Arabic text styling - Enhanced */
+    .arabic-text {
+        direction: rtl !important;
+        text-align: right !important;
+        font-family: 'Segoe UI', 'Arial Unicode MS', 'Tahoma', Arial, sans-serif !important;
+        unicode-bidi: bidi-override !important;
+    }
+    
+    .arabic-text * {
+        direction: rtl !important;
+        text-align: right !important;
+        unicode-bidi: embed !important;
+    }
+    
+    /* Enhanced RTL and LTR styling */
     [dir="rtl"], [lang="ar"] {
         direction: rtl !important;
         text-align: right !important;
         font-family: 'Segoe UI', 'Arial Unicode MS', 'Tahoma', Arial, sans-serif !important;
+        unicode-bidi: bidi-override !important;
     }
     
-    [dir="rtl"] *, [lang="ar"] * {
+    [dir="ltr"], [lang="en"] {
+        direction: ltr !important;
+        text-align: left !important;
+        unicode-bidi: normal !important;
+    }
+    
+    /* Force RTL for Arabic text in Streamlit containers */
+    [data-testid="chatMessage"] .arabic-text,
+    [data-testid="chatMessage"] [dir="rtl"],
+    [data-testid="chatMessage"] [lang="ar"] {
         direction: rtl !important;
         text-align: right !important;
-        unicode-bidi: embed !important;
+        unicode-bidi: bidi-override !important;
+    }
+    
+    /* Force LTR for English text in Streamlit containers */
+    [data-testid="chatMessage"] [dir="ltr"],
+    [data-testid="chatMessage"] [lang="en"] {
+        direction: ltr !important;
+        text-align: left !important;
+        unicode-bidi: normal !important;
+    }
+    
+    /* Remove extra spacing in chat messages */
+    .user-message p, .assistant-message p {
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    .user-message br, .assistant-message br {
+        display: none !important;
+    }
+    
+    /* Ensure proper text flow without extra breaks */
+    .user-message, .assistant-message {
+        white-space: normal !important;
+        line-height: 1.4 !important;
     }
     
     /* Chat container optimization */
@@ -511,7 +534,8 @@ def chat_page():
         with st.chat_message(message["role"]):
             class_name = "user-message" if message["role"] == "user" else "assistant-message"
             msg_id = f"msg-{i}-{message['role']}"
-            st.markdown(f'<div class="{class_name}" id="{msg_id}">{message["content"]}</div>', unsafe_allow_html=True)
+            style = get_message_style(message["content"])
+            st.markdown(f'<div class="{class_name}" id="{msg_id}" style="{style}">{message["content"]}</div>', unsafe_allow_html=True)
     
     # Handle FAQ prompt with streaming
     if hasattr(st.session_state, 'faq_prompt') and st.session_state.faq_prompt:
@@ -523,7 +547,8 @@ def chat_page():
             
         # Display user message
         with st.chat_message("user"):
-            st.markdown(f'<div class="user-message">{prompt}</div>', unsafe_allow_html=True)        
+            user_style = get_message_style(prompt)
+            st.markdown(f'<div class="user-message" style="{user_style}">{prompt}</div>', unsafe_allow_html=True)        
         st.session_state.messages.append({"role": "user", "content": prompt})        
         
         # Display streaming assistant response
@@ -535,11 +560,13 @@ def chat_page():
                 response_id = f"streaming-response-{len(st.session_state.messages)}"
                 for chunk in result['stream']:
                     full_response += chunk
-                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}">{full_response + "▌"}</div>', unsafe_allow_html=True)
+                    response_style = get_message_style(full_response)
+                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}" style="{response_style}">{full_response + "▌"}</div>', unsafe_allow_html=True)
                 
                 # Final message without cursor
                 final_id = f"{response_id}-final"
-                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}">{full_response}</div>', unsafe_allow_html=True)
+                final_style = get_message_style(full_response)
+                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}" style="{final_style}">{full_response}</div>', unsafe_allow_html=True)
         
         st.session_state.messages.append({"role": "assistant", "content": full_response})
         
@@ -552,7 +579,8 @@ def chat_page():
         if not st.session_state.current_session_id:
             create_new_session()
         with st.chat_message("user"):
-            st.markdown(f'<div class="user-message">{prompt}</div>', unsafe_allow_html=True)        
+            user_style = get_message_style(prompt)
+            st.markdown(f'<div class="user-message" style="{user_style}">{prompt}</div>', unsafe_allow_html=True)        
         st.session_state.messages.append({"role": "user", "content": prompt})        
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
@@ -562,11 +590,13 @@ def chat_page():
                 response_id = f"chat-streaming-response-{len(st.session_state.messages)}"
                 for chunk in result['stream']:
                     full_response += chunk
-                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}">{full_response + "▌"}</div>', unsafe_allow_html=True)
+                    response_style = get_message_style(full_response)
+                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}" style="{response_style}">{full_response + "▌"}</div>', unsafe_allow_html=True)
                 
                 # Final message without cursor
                 final_id = f"{response_id}-final"
-                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}">{full_response}</div>', unsafe_allow_html=True)
+                final_style = get_message_style(full_response)
+                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}" style="{final_style}">{full_response}</div>', unsafe_allow_html=True)
                 
         
         st.session_state.messages.append({"role": "assistant", "content": full_response})

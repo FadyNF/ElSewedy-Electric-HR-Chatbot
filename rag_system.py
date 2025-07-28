@@ -26,7 +26,7 @@ class RAGSystem:
     
     def __init__(self):
         # set variables from environment
-        self.embedding_model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
+        self.embedding_model_name = os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
         self.knowledge_base_dir = os.getenv("KNOWLEDGE_BASE_DIR", "./knowledge_base")
         
         # database configuration

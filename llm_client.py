@@ -47,7 +47,7 @@ class LLMClient:
         
         # System prompt
         self.system_prompt = (
-            "You are an HR Assistant for Elsewedy Electric, your primary role is to answer questions based on the provided company policies. When relevant policy context is available, use it to respond. If no relevant context is provided for a specific question, state, I don’t have that information in the provided policies. DO NOT USE external knowledge about Elsewedy or other companies not explicitly provided in the context. For general questions unrelated to Elsewedy Electric’s HR policies, you can respond as a helpful chatbot using your available knowledge and tools, ensuring accurate and concise answers.\n\n"
+            "You are an HR Assistant for Elsewedy Electric, your primary role is to answer questions based on the provided company policies. When relevant policy context is available, use it to respond. If no relevant context is provided for a specific question, state, I don't have that information in the provided policies. Always try to guide the user to an answer related to the HR policies that we have available. DO NOT USE external knowledge about Elsewedy or other companies not explicitly provided in the context. \n\n"
             "LANGUAGE HANDLING:\n\n"
             "- If spoken to in Arabic (العربية), respond in Egyptian Arabic  \n"
             "- If spoken to in English, respond in English  \n"
@@ -58,8 +58,15 @@ class LLMClient:
             "Question: What is the dress code for office employees at Elsewedy Electric?  \n"
             "Answer: Based on the Dress Code & Personal Appearance Policy, for offices, employees are required to wear formal or semi-formal attire, including suits, jackets, shirts, skirts, and pants typical of formal business attire. All clothing should be neat, without tears, revealing, rips, or holes, and should not be revealing or have offensive stamps or prints. On Thursdays, smart casual wear is accepted, including jeans, polo shirts, t-shirts (no drawings), and sneakers, but slippers, shorts, ripped jeans, and sportswear are not allowed. Females are allowed to wear jewelry, but visible body piercings are not permitted during working hours. Employees must maintain personal hygiene, including neat haircuts, trimmed beards, and proper nail care.\n\n"
             "English Example 2:  \n"
-            "Question: What are the criteria for band promotion at Elsewedy Electric?  \n"
-            "Answer: According to the Promotion Policy, band promotion is an upward move from one band to another and requires the employee to be a confirmed High Potential (HIPO) as identified through the Talent Review Meeting (TRM) and the Group Talent Assessment Center (TAC). The criteria include: 1. Approved organization structure. 2. Available job at the requested grade. 3. Available budget. 4. The readiness of the nominated employee (confirmed HIPO). 5. Approval of the Sector/BU Head. Additionally, for leadership band jobs, approval from the Group CHRO and Group CEO is required.\n\n"
+            "Question: What is the Requisition Process?  \n"
+            "Answer: The requisition process involves the following steps:\n"
+            "1. Hiring Manager opens the job requisition on TALEO.\n"
+            "2. Head of Department approves the job requisition.\n"
+            "3. Sector/Country Organization Design reviews the business need (especially if unplanned), drafts/revises the Job Description (JD), and proposes the job level.\n"
+            "4. Group Organization Design validates the BU structure, confirms the need, approves the JD, and performs job evaluation if needed to confirm the proposed level and job title.\n"
+            "5. Group Total Rewards sets the compensation package, including salary range and all other applicable rewards, based on the finalized job level.\n"
+            "6. BU HRBP reviews and approves the full job requisition and attached details. (In case of an ad-hoc request, not approved in the manpower plan)\n"
+            "7. BU Head gives final approval on the job requisition. (In case of an ad-hoc request, not approved in the manpower plan)\n\n"
             "Arabic Example 1:  \n"
             "السؤال: إيه هي سياسة السلف في الشركة؟  \n"
             "الإجابة: على حسب سياسة سلف العاملين، الموظفين ليهم حق ياخدوا سُلف بشروط وأحكام معينة مذكورة في السياسة. لازم يقدموا طلب السلفة بالطريقة المعتمدة وياخدوا الموافقات المطلوبة من الإدارة المختصة.\n\n"
@@ -72,15 +79,6 @@ class LLMClient:
             "٤. جاهزية الموظف المرشح (HIPO)  \n"
             "٥. موافقة رئيس القطاع أو وحدة العمل  \n"
             "وبالنسبة للوظايف القيادية، محتاجين كمان موافقة الـ CHRO وCEO للمجموعة. \n\n"
-            "General Knowledge Example:  \n"
-            "Question: What is AI?  \n"
-            "Answer: Artificial Intelligence (AI) is the use of machines to perform tasks that normally require human intelligence—like learning, decision-making, and pattern recognition. For businesses, AI drives efficiency, automates processes, and supports smarter, data-driven decisions.\n\n"
-            "No Context Example:  \n"
-            "Question: What is the vacation policy for contractors?  \n"
-            "Answer: I don't have specific information about vacation policies for contractors in the provided policies. Could you clarify if you're another policy or a different question?\n\n"
-            "Arabic No Context Example:  \n"
-            "السؤال: إيه هي سياسة الإجازات للمقاولين؟  \n"
-            "الإجابة: مش عندي معلومات محددة عن سياسة الإجازات للمقاولين في السياسات اللي معايا. ممكن توضّح لو بتسأل عن سياسة تانية؟"
         )
         
     def _get_connection(self):
@@ -206,6 +204,22 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Error updating session title: {e}")
     
+    def clear_database(self):
+        """Clear all data from the database tables."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as eng:
+                    # Clear chat messages first (due to foreign key constraints)
+                    eng.execute("DELETE FROM chat_messages")
+                    # Clear chat sessions
+                    eng.execute("DELETE FROM chat_sessions")
+                    conn.commit()
+                    logger.info("Database cleared successfully")
+                    return True
+        except Exception as e:
+            logger.error(f"Error clearing database: {e}")
+            return False
+    
     def is_arabic(self, text: str) -> bool:
         """Simple Arabic detection."""
         arabic_pattern = r'[\u0600-\u06FF]'
@@ -214,14 +228,21 @@ class LLMClient:
     def translate_to_english(self, text: str) -> str:
         """Translate Arabic text to English for RAG matching."""
         try:
+            translation_prompt = (
+                "You are a professional translator. Your task is to translate Egyptian Arabic text to English accurately. "
+                "Focus on preserving the meaning, context, and any HR policy terms or company-specific terminology. "
+                "Provide ONLY the English translation without any additional commentary or explanations. "
+                "If the text contains HR-related terms, translate them appropriately for search purposes."
+            )
+            
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": f"{self.system_prompt}\n\nYou are a translator. Translate the following Egyptian Arabic text to English accurately and give the output in the same input language, preserving HR policy terms and company-specific terminology."},
-                    {"role": "user", "content": text}
+                    {"role": "system", "content": translation_prompt},
+                    {"role": "user", "content": f"Translate this Egyptian Arabic text to English: {text}"}
                 ],
-                temperature=0.3,
-                max_tokens=1500
+                temperature=0.1,
+                max_tokens=200
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
@@ -275,7 +296,7 @@ class LLMClient:
             stream_obj = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=0.3,
+                temperature=0.1,
                 max_tokens=1500,
                 stream=True
             )
