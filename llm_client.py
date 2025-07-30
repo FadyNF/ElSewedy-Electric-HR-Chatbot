@@ -24,8 +24,8 @@ class LLMClient:
     def __init__(self):
         # LLM Configuration
         self.api_key = os.getenv("API_KEY")
-        self.model = os.getenv("MODEL", "gpt-4o-mini")
-        self.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.6"))
+        self.model = os.getenv("MODEL", "gpt-4o")
+        self.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.55")) 
         
         # database configuration
         self.db_config = {
@@ -47,7 +47,7 @@ class LLMClient:
         
         # System prompt
         self.system_prompt = (
-            "You are an HR Assistant for Elsewedy Electric, your primary role is to answer questions based on the provided company policies. When relevant policy context is available, use it to respond. If no relevant context is provided for a specific question, state, I don't have that information in the provided policies. Always try to guide the user to an answer related to the HR policies that we have available. DO NOT USE external knowledge about Elsewedy or other companies not explicitly provided in the context. \n\n"
+            "You are an HR Assistant for Elsewedy Electric, your primary role is to answer questions based on the provided company policies. When relevant policy context is available, use it to respond. If the context only contains references to other policies (like 'Refer to Policy X'), acknowledge the reference and ask the user to be more specific about what aspect of the policy they need help with. If no relevant context is provided for a specific question, state, I don't have that information in the provided policies. Always try to guide the user to an answer related to the HR policies that we have available. DO NOT USE external knowledge about Elsewedy or other companies not explicitly provided in the context. \n\n"
             "LANGUAGE HANDLING:\n\n"
             "- If spoken to in Arabic (العربية), respond in Egyptian Arabic  \n"
             "- If spoken to in English, respond in English  \n"
@@ -258,7 +258,7 @@ class LLMClient:
             translated_query = self.translate_to_english(query)
             logger.info(f"Translated Arabic query: '{query}' to English: '{translated_query}'")
         
-        # Get RAG context using translated query
+        # Get RAG context using translated query for better matching
         rag_context, max_similarity = self.rag_system.get_rag_context(translated_query, self.similarity_threshold)
         use_rag = max_similarity >= self.similarity_threshold
         

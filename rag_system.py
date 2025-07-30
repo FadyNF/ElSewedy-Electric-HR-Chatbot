@@ -8,11 +8,8 @@ from sentence_transformers import SentenceTransformer
 import psycopg2
 from psycopg2.extras import execute_values
 import re
-from unstructured.partition.pdf import partition_pdf
 import uuid
-import pdfplumber
-import pytesseract
-from PIL import Image
+from llama_parse import LlamaParse
 
 # Load environment variables
 load_dotenv("config.env")
@@ -22,14 +19,19 @@ logger = logging.getLogger(__name__)
 
 
 class RAGSystem:
-    """Full RAG system for PDF loading, chunking, embedding, and psql vector storage."""
+    """Clean RAG system using LlamaParse for PDF processing and PostgreSQL for vector storage."""
     
     def __init__(self):
-        # set variables from environment
+        # Set variables from environment
         self.embedding_model_name = os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
-        self.knowledge_base_dir = os.getenv("KNOWLEDGE_BASE_DIR", "./knowledge_base")
+        self.knowledge_base_dir = os.getenv("KNOWLEDGE_BASE_DIR", "d:/ELSEWEDY/ElSewedy-Electric-HR-Chatbot/knowledge_base")
         
-        # database configuration
+        # LlamaParse configuration
+        self.llama_cloud_api_key = os.getenv("LLAMA_CLOUD_API_KEY")
+        if not self.llama_cloud_api_key or self.llama_cloud_api_key == "your_llama_cloud_api_key_here":
+            raise ValueError("Please set your LLAMA_CLOUD_API_KEY in config.env")
+
+        # Database configuration
         self.db_config = {
             'host': os.getenv('PGHOST', 'localhost'),
             'port': int(os.getenv('PGPORT', '5433')),
@@ -38,12 +40,21 @@ class RAGSystem:
             'password': os.getenv('PGPASSWORD', 'password')
         }
         
-        # initialize components
-        
-        # Load embedding model
+        # Initialize components
         logger.info(f"Loading embedding model: {self.embedding_model_name}")
         self.embedding_model = SentenceTransformer(self.embedding_model_name)
         self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
+        
+        # Initialize LlamaParse
+        self.parser = LlamaParse(
+            api_key=self.llama_cloud_api_key,
+            result_type="markdown",  # Get structured markdown output
+            verbose=True,
+            language="en",
+            table_extraction=True,  # Better table extraction
+            split_by_page=False,  # Keep content together
+            premium_quality_parsing=True  # Higher quality extraction
+        )
         
         # Initialize database
         self._init_database()
@@ -131,210 +142,108 @@ class RAGSystem:
             logger.error(f"Error initializing database: {e}")
             raise
     
-    def load_pdf_elements(self, file_path: str) -> List:
+    def parse_pdf_with_llamaparse(self, file_path: str) -> str:
+        """Parse PDF using LlamaParse to get structured markdown content."""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"PDF file not found: {file_path}")
-        logger.info(f"Loading PDF with unstructured: {file_path}")
-        elements = partition_pdf(file_path, strategy="hi_res", ocr_languages=["eng"])
-        logger.info(f"Extracted {len(elements)} elements from PDF")
-        return elements
-
-    def group_semantic_chunks(self, elements, file_path):
-        chunks = []
-        current_section = {
-            "title": "Untitled Section",
-            "subsections": [],
-            "content": [],
-            "page_numbers": set()
-        }
-
-        current_subsection = None
-
-        def save_current_section():
-            if current_section["content"] or current_section["subsections"]:
-                chunks.append({
-                    "chunk_id": str(uuid.uuid4()),
-                    "title": current_section["title"],
-                    "content": "\n".join(current_section["content"]).strip(),
-                    "subsections": current_section["subsections"],
-                    "source": os.path.basename(file_path),
-                    "page_numbers": sorted(list(current_section["page_numbers"])),
-                })
-
-        def save_current_subsection():
-            if current_subsection and current_subsection["content"]:
-                current_section["subsections"].append({
-                    "title": current_subsection["title"],
-                    "content": "\n".join(current_subsection["content"]).strip(),
-                    "page_numbers": sorted(list(current_subsection["page_numbers"])),
-                })
-
-        for el in elements:
-            category = el.category or "Unknown"
-            text = (el.text or "").strip()
-
-            # Skip completely if it's not useful
-            if category in ["Header", "Footer", "Image", "PageBreak", "UncategorizedText"]:
-                continue
-            if not text:
-                continue
-
-            # Clean up the text and page info
-            page = el.metadata.page_number or 1
-
-            # Skip "Contents" section — common in PDFs with no use for rag 
-            if category == "Title" and text.lower().strip() in ["contents", "table of contents"]:
-                continue
-
-            # Start new section if we find a Title
-            if category == "Title":
-                save_current_subsection()
-                save_current_section()
-                current_section = {
-                    "title": text,
-                    "subsections": [],
-                    "content": [],
-                    "page_numbers": {page}
-                }
-                current_subsection = None
-                continue
-
-            # Detect and handle subsections (e.g., by pattern or category)
-            if category in ["SectionHeader", "Heading"]:
-                save_current_subsection()
-                current_subsection = {
-                    "title": text,
-                    "content": [],
-                    "page_numbers": {page}
-                }
-                continue
-
-            # Otherwise, add as regular content
-            if current_subsection:
-                current_subsection["content"].append(text)
-                current_subsection["page_numbers"].add(page)
-            else:
-                current_section["content"].append(text)
-                current_section["page_numbers"].add(page)
-
-        # Save  last chunk
-        save_current_subsection()
-        save_current_section()
-
-        return chunks
-    def summarize_table(self, rows, max_rows=15): 
-        if not rows:
-            return "No rows found."
-
-        headers = list(rows[0].keys())
-        lines = [" | ".join(headers), " | ".join(["---"] * len(headers))]
-
         
-        effective_max = max_rows if len(rows) > max_rows else len(rows)
+        logger.info(f"Parsing PDF with LlamaParse: {file_path}")
         
-        for i, row in enumerate(rows):
-            if i >= effective_max:
-                remaining = len(rows) - effective_max
-                lines.append(f"...and {remaining} more rows.")
-                break
-            line = " | ".join(row.get(h, "") for h in headers)
-            lines.append(line)
+        try:
+            # Parse the document
+            documents = self.parser.load_data(file_path)
+            
+            if not documents:
+                logger.warning(f"No content extracted from {file_path}")
+                return ""
+            
+            # Combine all document content
+            full_content = "\n\n".join([doc.text for doc in documents])
+            logger.info(f"Successfully parsed {file_path} - {len(full_content)} characters extracted")
+            
+            return full_content
+            
+        except Exception as e:
+            logger.error(f"Error parsing PDF with LlamaParse: {e}")
+            return ""
 
-        return "\n".join(lines)
-    def extract_tables_and_images(self, elements, file_path):
-        """Simple table and image extraction using only tesseract OCR."""
+    def clean_and_filter_text(self, text: str) -> str:
+        """Apply basic text preprocessing and remove unwanted content."""
+        if not text or len(text.strip()) < 5:
+            return ""
+        
+        text = text.strip()
+        
+        # Remove website links
+        if 'www.elsewedyelectric.com' in text.lower():
+            logger.info(f"Found website link in text: {text[:100]}...")
+        text = re.sub(r'www\.elsewedyelectric\.com', '', text, flags=re.IGNORECASE)
+        if 'www.elsewedyelectric.com' in text.lower():
+            logger.warning(f"Website link still present after removal attempt!")
+        else:
+            logger.debug(f"Website link successfully removed or not present")
+        
+        # Remove lines with 5+ consecutive dots (contents pages)
+        text = re.sub(r'^.*\.{5,}.*$', '', text, flags=re.MULTILINE)
+        
+        # Remove excessive newlines (more than 3 consecutive)
+        text = re.sub(r'\n{4,}', '\n\n', text)
+        
+        # Clean up any remaining whitespace
+        text = text.strip()
+        
+        # Skip very short text after cleaning (increased threshold)
+        if len(text) < 10:
+            return ""
+        
+        # Skip page numbers and formatting
+        if re.match(r'^[\d\s\.\-_]+$', text.strip()):
+            return ""
+        
+        # Skip if the remaining text is mostly dots and spaces
+        clean_check = re.sub(r'[\s\.\-_]+', '', text)
+        if len(clean_check) < 3:
+            return ""
+        
+        return text.strip()
+
+    def chunk_markdown_content(self, content: str, file_path: str) -> List[dict]:
+        """Chunk the markdown content into semantic sections."""
         chunks = []
         doc_name = os.path.basename(file_path)
-
-        # Get page titles for context
-        page_titles = {}
-        for el in elements:
-            if el.category == "Title" and el.metadata and el.metadata.page_number:
-                pg = el.metadata.page_number
-                page_titles.setdefault(pg, []).append(el.text.strip())
-
-        with pdfplumber.open(file_path) as pdf:
-            for i, page in enumerate(pdf.pages):
-                page_num = i + 1
-
-                # Extract tables using pdfplumber only
-                try:
-                    tables = page.extract_tables()
-                    if tables:
-                        logger.info(f"[PDF Page {page_num}] Found {len(tables)} tables")
-
-                    for table in tables:
-                        if not table or len(table) <= 1:
-                            continue
-                            
-                        headers = table[0] if table[0] else []
-                        rows = table[1:]
-
-                        # Create structured data with null handling
-                        structured_data = []
-                        for row in rows:
-                            if row:  # Skip empty rows
-                                record = {}
-                                for col_idx, cell in enumerate(row):
-                                    header = headers[col_idx] if col_idx < len(headers) and headers[col_idx] else f"Column_{col_idx+1}"
-                                    record[header] = str(cell).strip() if cell else "-"
-                                structured_data.append(record)
-
-                        if structured_data:  # Only add if we have valid data
-                            title_texts = page_titles.get(page_num, [])
-                            title = title_texts[-1] if title_texts else f"Table (Page {page_num})"
-
-                            chunks.append({
-                                "chunk_id": str(uuid.uuid4()),
-                                "title": title,
-                                "type": "table",
-                                "content": self.summarize_table(structured_data),
-                                "raw_table": structured_data,
-                                "page_numbers": [page_num],
-                                "source": doc_name
-                            })
-                except Exception as e:
-                    logger.warning(f"Table extraction failed on page {page_num}: {e}")
-
-                # Simple image OCR with tesseract 
-                try:
-                    for img_dict in page.images:
-                        x0, top, x1, bottom = img_dict["x0"], img_dict["top"], img_dict["x1"], img_dict["bottom"]
-                        
-                        # Skip small images (logos, decorative elements)
-                        width, height = x1 - x0, bottom - top
-                        if width < 100 or height < 100:
-                            continue
-                            
-                        cropped_image = page.to_image(resolution=150).original.crop((x0, top, x1, bottom)).convert("RGB")
-                        ocr_text = pytesseract.image_to_string(cropped_image).strip()
-                        
-                        # Only add if OCR found meaningful text
-                        if len(ocr_text) > 15:
-                            chunks.append({
-                                "chunk_id": str(uuid.uuid4()),
-                                "title": f"Image Text (Page {page_num})",
-                                "type": "image",
-                                "content": ocr_text,
-                                "page_numbers": [page_num],
-                                "source": doc_name
-                            })
-
-                except Exception as e:
-                    logger.warning(f"Image OCR failed on page {page_num}: {e}")
-
+        
+        # Split content by headers (markdown style)
+        sections = re.split(r'\n(?=#+\s)', content)
+        
+        for i, section in enumerate(sections):
+            if not section.strip():
+                continue
+            
+            # Clean the section content
+            cleaned_content = self.clean_and_filter_text(section)
+            if not cleaned_content:
+                continue
+            
+            # Extract title from first line if it's a header
+            lines = cleaned_content.split('\n')
+            if lines[0].startswith('#'):
+                title = re.sub(r'^#+\s*', '', lines[0]).strip()
+                content_body = '\n'.join(lines[1:]).strip()
+            else:
+                title = f"Section {i+1}"
+                content_body = cleaned_content
+            
+            if content_body and len(content_body.strip()) > 10:  # Only add if there's content
+                chunks.append({
+                    "chunk_id": str(uuid.uuid4()),
+                    "title": title,
+                    "content": content_body,
+                    "source": doc_name,
+                    "chunk_index": i
+                })
+        
+        logger.info(f"Created {len(chunks)} chunks from {doc_name}")
         return chunks
-    def parse_pdf_combined(self, file_path):
-        """Parse PDF using combined semantic and visual extraction."""
-        # Step 1: Semantic elements
-        elements = self.load_pdf_elements(file_path)
-        semantic_chunks = self.group_semantic_chunks(elements, file_path)
-
-        # Step 2: Visual elements (tables/images)
-        visual_chunks = self.extract_tables_and_images(elements, file_path)
-
-        # Step 3: Combine and return
-        return semantic_chunks + visual_chunks
 
     def generate_embeddings(self, texts: List[str]) -> np.ndarray:
         """Generate embeddings for a list of texts."""
@@ -381,8 +290,8 @@ class RAGSystem:
             raise
     
     def build_index(self, dir_path: Optional[str] = None):
-        """Complete pipeline: load PDFs from directory, chunk, embed, and store."""
-        logger.info("Building RAG index...")
+        """Complete pipeline: load PDFs from directory, parse with LlamaParse, chunk, embed, and store."""
+        logger.info("Building RAG index with LlamaParse...")
         
         dir_path = dir_path or self.knowledge_base_dir
         if not os.path.exists(dir_path):
@@ -398,46 +307,41 @@ class RAGSystem:
         for pdf_file in pdf_files:
             full_path = os.path.join(dir_path, pdf_file)
             try:
-                # Use the new combined parsing function
-                all_chunks = self.parse_pdf_combined(full_path)
+                # Parse PDF with LlamaParse
+                content = self.parse_pdf_with_llamaparse(full_path)
+                if not content:
+                    logger.warning(f"No content extracted from {full_path}")
+                    continue
                 
+                # Chunk the content
+                chunks = self.chunk_markdown_content(content, full_path)
+                
+                if not chunks:
+                    logger.warning(f"No chunks created from {full_path}")
+                    continue
+                
+                # Prepare data for embedding
                 chunked_data = []
-                for i, chunk in enumerate(all_chunks):
-                    # Handle different chunk types
-                    if chunk.get('type') in ['table', 'image', 'image-table']:
-                        # For visual chunks, use caption or content
-                        if chunk.get('type') == 'table':
-                            text = f"{chunk['title']}\n{chunk['content']}"
-                        else:
-                            text = f"{chunk['title']}\n{chunk.get('caption', '')}"
-                    else:
-                        # For semantic chunks, combine title and content
-                        text = f"{chunk['title']}\n{chunk['content']}"
-                    
-                    # Get page number from the new structure
-                    page_numbers = chunk.get('page_numbers', [])
-                    page_number = min(page_numbers) if page_numbers else None
-                    
+                for chunk in chunks:
+                    text = f"{chunk['title']}\n{chunk['content']}"
                     metadata = {
-                        'chunk_index': i,
-                        'page_number': page_number,
+                        'chunk_index': chunk['chunk_index'],
+                        'page_number': None,  # LlamaParse doesn't provide specific page numbers in this mode
                         'source_file': chunk['source']
                     }
                     chunked_data.append((text, metadata))
                 
-                if not chunked_data:
-                    logger.warning(f"No chunks created from {full_path}")
-                    continue
-                
+                # Generate embeddings and store
                 texts = [chunk[0] for chunk in chunked_data]
                 embeddings = self.generate_embeddings(texts)
                 
                 self.store_embeddings(chunked_data, embeddings)
-                logger.info(f"Successfully processed {full_path} with {len(all_chunks)} chunks")
+                logger.info(f"Successfully processed {full_path} with {len(chunks)} chunks")
+                
             except Exception as e:
                 logger.error(f"Error processing {full_path}: {str(e)}")
         
-        logger.info("RAG index built successfully")
+        logger.info("RAG index built successfully with LlamaParse")
     
     def ensure_index_exists(self):
         """Ensure the RAG index exists, rebuild if necessary."""
