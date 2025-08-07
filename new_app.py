@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import os
 import shutil
 import logging
+import html
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -92,8 +93,7 @@ def inject_arabic_formatting_script():
                 });
             }
         });
-    });
-    
+    });    
     observer.observe(document.body, {
         childList: true,
         subtree: true
@@ -105,25 +105,9 @@ def inject_arabic_formatting_script():
     """
     components.html(script, height=0)
 
-# Logo handling
 def setup_logo():
     """Setup logo file for the application."""
     logo_path = "logo.png"
-    if not os.path.exists(logo_path):
-        possible_paths = [
-            "../HR UI/logo.png", 
-            "../logo.png",
-            "../../HR UI/logo.png",
-            "../../logo.png"
-        ]
-        for path in possible_paths:
-            if os.path.exists(path):
-                try:
-                    shutil.copy2(path, logo_path)
-                    logger.info(f"Logo copied from {path}")
-                    break
-                except Exception as e:
-                    logger.warning(f"Failed to copy logo from {path}: {e}")
     return logo_path if os.path.exists(logo_path) else None
 
 # Initialize components
@@ -474,7 +458,7 @@ def chat_page():
         
         if st.button("New Chat", type="primary", use_container_width=True):
 
-            # Removed: create_new_session()
+            
             st.session_state.messages = []
             st.session_state.current_session_id = None
             st.session_state.chat_input_key += 1
@@ -535,7 +519,8 @@ def chat_page():
             class_name = "user-message" if message["role"] == "user" else "assistant-message"
             msg_id = f"msg-{i}-{message['role']}"
             style = get_message_style(message["content"])
-            st.markdown(f'<div class="{class_name}" id="{msg_id}" style="{style}">{message["content"]}</div>', unsafe_allow_html=True)
+            safe_content = html.escape(message["content"])
+            st.markdown(f'<div class="{class_name}" id="{msg_id}" style="{style}">{safe_content}</div>', unsafe_allow_html=True)
     
     # Handle FAQ prompt with streaming
     if hasattr(st.session_state, 'faq_prompt') and st.session_state.faq_prompt:
@@ -548,7 +533,8 @@ def chat_page():
         # Display user message
         with st.chat_message("user"):
             user_style = get_message_style(prompt)
-            st.markdown(f'<div class="user-message" style="{user_style}">{prompt}</div>', unsafe_allow_html=True)        
+            safe_prompt = html.escape(prompt)
+            st.markdown(f'<div class="user-message" style="{user_style}">{safe_prompt}</div>', unsafe_allow_html=True)        
         st.session_state.messages.append({"role": "user", "content": prompt})        
         
         # Display streaming assistant response
@@ -561,12 +547,14 @@ def chat_page():
                 for chunk in result['stream']:
                     full_response += chunk
                     response_style = get_message_style(full_response)
-                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}" style="{response_style}">{full_response + "▌"}</div>', unsafe_allow_html=True)
+                    safe_response = html.escape(full_response)
+                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}" style="{response_style}">{safe_response + "▌"}</div>', unsafe_allow_html=True)
                 
                 # Final message without cursor
                 final_id = f"{response_id}-final"
                 final_style = get_message_style(full_response)
-                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}" style="{final_style}">{full_response}</div>', unsafe_allow_html=True)
+                safe_final = html.escape(full_response)
+                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}" style="{final_style}">{safe_final}</div>', unsafe_allow_html=True)
         
         st.session_state.messages.append({"role": "assistant", "content": full_response})
         
@@ -580,7 +568,8 @@ def chat_page():
             create_new_session()
         with st.chat_message("user"):
             user_style = get_message_style(prompt)
-            st.markdown(f'<div class="user-message" style="{user_style}">{prompt}</div>', unsafe_allow_html=True)        
+            safe_prompt2 = html.escape(prompt)
+            st.markdown(f'<div class="user-message" style="{user_style}">{safe_prompt2}</div>', unsafe_allow_html=True)        
         st.session_state.messages.append({"role": "user", "content": prompt})        
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
@@ -591,12 +580,14 @@ def chat_page():
                 for chunk in result['stream']:
                     full_response += chunk
                     response_style = get_message_style(full_response)
-                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}" style="{response_style}">{full_response + "▌"}</div>', unsafe_allow_html=True)
+                    safe_chat_response = html.escape(full_response)
+                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}" style="{response_style}">{safe_chat_response + "▌"}</div>', unsafe_allow_html=True)
                 
                 # Final message without cursor
                 final_id = f"{response_id}-final"
                 final_style = get_message_style(full_response)
-                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}" style="{final_style}">{full_response}</div>', unsafe_allow_html=True)
+                safe_chat_final = html.escape(full_response)
+                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}" style="{final_style}">{safe_chat_final}</div>', unsafe_allow_html=True)
                 
         
         st.session_state.messages.append({"role": "assistant", "content": full_response})
@@ -610,7 +601,7 @@ def main():
         page_title="HR Support – ELSEWEDY ELECTRIC",
         page_icon="🏢",
         layout="wide",
-        initial_sidebar_state="expanded"  # Changed from "collapsed"
+        initial_sidebar_state="expanded"  
     )    
     # Setup logo and initialize session state
     setup_logo()

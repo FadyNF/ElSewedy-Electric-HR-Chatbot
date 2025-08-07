@@ -204,27 +204,12 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Error updating session title: {e}")
     
-    def clear_database(self):
-        """Clear all data from the database tables."""
-        try:
-            with self._get_connection() as conn:
-                with conn.cursor() as eng:
-                    # Clear chat messages first (due to foreign key constraints)
-                    eng.execute("DELETE FROM chat_messages")
-                    # Clear chat sessions
-                    eng.execute("DELETE FROM chat_sessions")
-                    conn.commit()
-                    logger.info("Database cleared successfully")
-                    return True
-        except Exception as e:
-            logger.error(f"Error clearing database: {e}")
-            return False
-    
+
     def is_arabic(self, text: str) -> bool:
         """Simple Arabic detection."""
         arabic_pattern = r'[\u0600-\u06FF]'
         return bool(re.search(arabic_pattern, text))
-    
+    # Temporary measure.
     def translate_to_english(self, text: str) -> str:
         """Translate Arabic text to English for RAG matching."""
         try:
@@ -242,7 +227,7 @@ class LLMClient:
                     {"role": "user", "content": f"Translate this Egyptian Arabic text to English: {text}"}
                 ],
                 temperature=0.1,
-                max_tokens=200
+                max_tokens=500
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
@@ -268,7 +253,7 @@ class LLMClient:
 
     
     def generate_response(self, query: str, conversation_history: List[Dict] = None, stream: bool = False) -> Tuple[Union[str, Callable[[], Generator[str, None, None]]], str, float]:
-        """Generate response using LLM with optional RAG context, optionally streaming."""
+        """Generate response using LLM with optional RAG context"""
         use_rag, rag_context, similarity_score, translated_query = self.decide_rag_usage(query)
         messages = []
 
@@ -297,7 +282,7 @@ class LLMClient:
                 model=self.model,
                 messages=messages,
                 temperature=0.1,
-                max_tokens=1500,
+                max_tokens=2000,
                 stream=True
             )
 
@@ -336,7 +321,7 @@ class LLMClient:
                 return error_response, "", 0.0
     
     def chat(self, session_id: str, user_message: str, stream: bool = False) -> Dict:
-        """Handle chat interaction with optional streaming."""
+        """Handle chat interaction"""
         try:
             # Get history
             conversation_history = self.get_session_messages(session_id)
@@ -400,17 +385,3 @@ class LLMClient:
 if __name__ == "__main__":
     # Test the LLM client
     llm = LLMClient()
-    
-    # Create a test session
-    session_id = llm.create_session("Test Session")
-    print(f"Created session: {session_id}")
-    
-    # Test chat
-    result = llm.chat(session_id, "What is the dress code policy?")
-    print(f"Response: {result['response']}")
-    print(f"Used RAG: {result['used_rag']}")
-    print(f"Similarity: {result['similarity_score']:.3f}")
-    
-    # List sessions
-    sessions = llm.list_sessions()
-    print(f"Sessions: {len(sessions)}")

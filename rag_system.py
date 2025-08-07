@@ -28,8 +28,6 @@ class RAGSystem:
         
         # LlamaParse configuration
         self.llama_cloud_api_key = os.getenv("LLAMA_CLOUD_API_KEY")
-        if not self.llama_cloud_api_key or self.llama_cloud_api_key == "your_llama_cloud_api_key_here":
-            raise ValueError("Please set your LLAMA_CLOUD_API_KEY in config.env")
 
         # Database configuration
         self.db_config = {
@@ -51,9 +49,9 @@ class RAGSystem:
             result_type="markdown",  # Get structured markdown output
             verbose=True,
             language="en",
-            table_extraction=True,  # Better table extraction
-            split_by_page=False,  # Keep content together
-            premium_quality_parsing=True  # Higher quality extraction
+            table_extraction=True,  
+            split_by_page=False,  
+            premium_quality_parsing=True  
         )
         
         # Initialize database
@@ -166,14 +164,11 @@ class RAGSystem:
         except Exception as e:
             logger.error(f"Error parsing PDF with LlamaParse: {e}")
             return ""
-
     def clean_and_filter_text(self, text: str) -> str:
         """Apply basic text preprocessing and remove unwanted content."""
-        if not text or len(text.strip()) < 5:
+        if not text or len(text.strip()) < 10:
             return ""
-        
         text = text.strip()
-        
         # Remove website links
         if 'www.elsewedyelectric.com' in text.lower():
             logger.info(f"Found website link in text: {text[:100]}...")
@@ -182,31 +177,17 @@ class RAGSystem:
             logger.warning(f"Website link still present after removal attempt!")
         else:
             logger.debug(f"Website link successfully removed or not present")
-        
         # Remove lines with 5+ consecutive dots (contents pages)
         text = re.sub(r'^.*\.{5,}.*$', '', text, flags=re.MULTILINE)
-        
-        # Remove excessive newlines (more than 3 consecutive)
+        # Remove excessive newlines (more than 3 consecutive- title pages)
         text = re.sub(r'\n{4,}', '\n\n', text)
-        
         # Clean up any remaining whitespace
-        text = text.strip()
-        
-        # Skip very short text after cleaning (increased threshold)
-        if len(text) < 10:
-            return ""
-        
+        text = text.strip() 
         # Skip page numbers and formatting
         if re.match(r'^[\d\s\.\-_]+$', text.strip()):
             return ""
-        
-        # Skip if the remaining text is mostly dots and spaces
-        clean_check = re.sub(r'[\s\.\-_]+', '', text)
-        if len(clean_check) < 3:
-            return ""
-        
         return text.strip()
-
+    #Chunking : Cause of most issues in system.
     def chunk_markdown_content(self, content: str, file_path: str) -> List[dict]:
         """Chunk the markdown content into semantic sections."""
         chunks = []
@@ -294,20 +275,12 @@ class RAGSystem:
         logger.info("Building RAG index with LlamaParse...")
         
         dir_path = dir_path or self.knowledge_base_dir
-        if not os.path.exists(dir_path):
-            logger.error(f"Knowledge base directory not found: {dir_path}")
-            return
-        
         pdf_files = [f for f in os.listdir(dir_path) if f.lower().endswith('.pdf')]
-        
-        if not pdf_files:
-            logger.warning(f"No PDF files found in {dir_path}")
-            return
-        
+        # Loop over files
         for pdf_file in pdf_files:
             full_path = os.path.join(dir_path, pdf_file)
             try:
-                # Parse PDF with LlamaParse
+                # parse PDF
                 content = self.parse_pdf_with_llamaparse(full_path)
                 if not content:
                     logger.warning(f"No content extracted from {full_path}")
@@ -326,7 +299,7 @@ class RAGSystem:
                     text = f"{chunk['title']}\n{chunk['content']}"
                     metadata = {
                         'chunk_index': chunk['chunk_index'],
-                        'page_number': None,  # LlamaParse doesn't provide specific page numbers in this mode
+                        'page_number': None,
                         'source_file': chunk['source']
                     }
                     chunked_data.append((text, metadata))
@@ -400,7 +373,7 @@ class RAGSystem:
     
     def get_rag_context(self, query: str, similarity_threshold: float = None) -> Tuple[str, float]:
         """Get RAG context for a query if similarity score is above threshold."""
-        similarity_threshold = similarity_threshold or float(os.getenv("SIMILARITY_THRESHOLD", "0.7"))
+        similarity_threshold = similarity_threshold or float(os.getenv("SIMILARITY_THRESHOLD", "0.6"))
         
         similar_chunks = self.search_similar(query)
         
@@ -427,11 +400,3 @@ if __name__ == "__main__":
     
     # Build index (automatically overwrites existing embeddings per file)
     rag.build_index()
-    
-    # Test search
-    test_query = "What is the dress code policy?"
-    context, similarity = rag.get_rag_context(test_query)
-    
-    print(f"Query: {test_query}")
-    print(f"Max Similarity: {similarity:.3f}")
-    print(f"Context: {context[:200]}..." if context else "No context above threshold")
