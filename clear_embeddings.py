@@ -1,39 +1,32 @@
 #!/usr/bin/env python3
 """
-Simple script to clear the database.
+Clear the ChromaDB collection used for embeddings.
 """
 
 import os
-import sys
-import psycopg2
 from dotenv import load_dotenv
+import chromadb
 
 # Load environment variables
 load_dotenv("config.env")
 
-def clear_database():
-    """Clear only the document embeddings from the database."""
-    db_config = {
-        'host': os.getenv('PGHOST', 'localhost'),
-        'port': int(os.getenv('PGPORT', '5433')),
-        'database': os.getenv('PGDATABASE', 'test'),
-        'user': os.getenv('PGUSER', 'postgres'),
-        'password': os.getenv('PGPASSWORD', 'password')
-    }
-    
+def clear_chroma_collection():
+    """Drop or empty the 'knowledge_base' collection in ChromaDB."""
+    chroma_store_path = os.getenv("CHROMA_STORE_PATH", os.path.join(os.getcwd(), "chroma_store"))
+    client = chromadb.PersistentClient(path=chroma_store_path)
+    collection_name = "knowledge_base"
     try:
-        with psycopg2.connect(**db_config) as conn:
-            with conn.cursor() as eng:
-                # Clear only document embeddings
-                eng.execute("DELETE FROM document_embeddings")
-                print("Cleared document_embeddings table")
-                
-                conn.commit()
-                print("Embeddings cleared successfully!")
-                return True
+        # Prefer dropping the collection for a clean reset
+        names = [c.name for c in client.list_collections()]
+        if collection_name in names:
+            client.delete_collection(collection_name)
+            print(f"Dropped collection: {collection_name}")
+        else:
+            print(f"Collection '{collection_name}' not found; nothing to clear.")
+        return True
     except Exception as e:
-        print(f"Error clearing embeddings: {e}")
+        print(f"Error clearing Chroma collection: {e}")
         return False
 
 if __name__ == "__main__":
-    clear_database() 
+    clear_chroma_collection()

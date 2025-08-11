@@ -1,14 +1,11 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import os
-import shutil
 import logging
 import html
 from datetime import datetime
-from pathlib import Path
 from dotenv import load_dotenv
 from llm_client import LLMClient
-from rag_system import RAGSystem
 
 # Load environment variables
 load_dotenv("config.env")
@@ -29,6 +26,94 @@ def get_message_style(text):
         return 'direction: rtl; text-align: right; font-family: "Segoe UI", "Arial Unicode MS", "Tahoma", Arial, sans-serif; unicode-bidi: bidi-override;'
     else:
         return 'direction: ltr; text-align: left;'
+
+def render_markdown_safely(content: str) -> str:
+    """Render markdown safely while preserving Arabic text formatting."""
+    import re
+    
+    # First, escape HTML to prevent XSS
+    content = html.escape(content)
+    
+    # Handle Arabic text better - preserve Arabic punctuation and formatting
+    # Bold text: **text** -> <strong>text</strong> (handle Arabic commas properly)
+    # Use non-greedy matching and handle Arabic punctuation
+    content = re.sub(r'\*\*([^*]+?)\*\*', r'<strong>\1</strong>', content)
+    
+    # Italic text: *text* -> <em>text</em>
+    content = re.sub(r'\*([^*]+?)\*', r'<em>\1</em>', content)
+    
+    # Numbered lists: 1. text -> <li>text</li>
+    content = re.sub(r'^\d+\.\s+(.*?)$', r'<li>\1</li>', content, flags=re.MULTILINE)
+    
+    # Bullet points: - text or • text -> <li>text</li>
+    content = re.sub(r'^[-•]\s+(.*?)$', r'<li>\1</li>', content, flags=re.MULTILINE)
+    
+    # Handle Arabic bullet points (Arabic bullet: •)
+    content = re.sub(r'^•\s+(.*?)$', r'<li>\1</li>', content, flags=re.MULTILINE)
+    
+    # Wrap consecutive <li> elements in <ol> or <ul>
+    lines = content.split('\n')
+    result_lines = []
+    in_list = False
+    list_type = None
+    
+    for line in lines:
+        if line.strip().startswith('<li>'):
+            if not in_list:
+                # Determine list type based on first item
+                if re.match(r'^\d+\.', line.strip()):
+                    list_type = 'ol'
+                else:
+                    list_type = 'ul'
+                result_lines.append(f'<{list_type}>')
+                in_list = True
+            result_lines.append(line)
+        else:
+            if in_list:
+                result_lines.append(f'</{list_type}>')
+                in_list = False
+            result_lines.append(line)
+    
+    if in_list:
+        result_lines.append(f'</{list_type}>')
+    
+    return '\n'.join(result_lines)
+
+def display_message(role: str, content: str, msg_id: str = None):
+    """Display a chat message with proper styling and markdown support."""
+    class_name = "user-message" if role == "user" else "assistant-message"
+    msg_id = msg_id or f"msg-{role}"
+    style = get_message_style(content)
+    
+    # Render markdown safely
+    rendered_content = render_markdown_safely(content)
+    
+    return f'<div class="{class_name}" id="{msg_id}" style="{style}">{rendered_content}</div>'
+
+def handle_streaming_response(llm_client, session_id: str, prompt: str, message_placeholder):
+    """Handle streaming response with real-time updates."""
+    result = llm_client.chat(session_id, prompt)
+    full_response = ""
+    response_id = f"streaming-{len(st.session_state.messages)}"
+    
+    for chunk in result['stream']:
+        full_response += chunk
+        message_placeholder.markdown(
+            display_message("assistant", full_response + "▌", response_id), 
+            unsafe_allow_html=True
+        )
+    
+    # Final message without cursor
+    message_placeholder.markdown(
+        display_message("assistant", full_response, f"{response_id}-final"), 
+        unsafe_allow_html=True
+    )
+    
+    # Log RAG usage
+    if result['used_rag']:
+        logger.info(f"RAG used with similarity: {result['similarity_score']:.3f}")
+    
+    return full_response, result
 
 def inject_arabic_formatting_script():
     """Inject optimized JavaScript for Arabic text formatting."""
@@ -107,8 +192,7 @@ def inject_arabic_formatting_script():
 
 def setup_logo():
     """Setup logo file for the application."""
-    logo_path = "logo.png"
-    return logo_path if os.path.exists(logo_path) else None
+    return "logo.png" if os.path.exists("logo.png") else None
 
 # Initialize components
 @st.cache_resource
@@ -116,10 +200,7 @@ def get_llm_client():
     """Initialize and cache LLM client."""
     return LLMClient()
 
-@st.cache_resource  
-def get_rag_system():
-    """Initialize and cache RAG system."""
-    return RAGSystem()
+
 
 def initialize_session_state():
     """Initialize session state variables."""
@@ -363,6 +444,46 @@ def chat_page():
         line-height: 1.4 !important;
     }
     
+    /* Markdown element styling */
+    .user-message strong, .assistant-message strong {
+        font-weight: bold !important;
+    }
+    
+    .user-message em, .assistant-message em {
+        font-style: italic !important;
+    }
+    
+    .user-message ul, .assistant-message ul,
+    .user-message ol, .assistant-message ol {
+        margin: 8px 0 !important;
+        padding-left: 20px !important;
+        padding-right: 20px !important;
+    }
+    
+    .user-message li, .assistant-message li {
+        margin: 4px 0 !important;
+        line-height: 1.3 !important;
+    }
+    
+    /* Arabic-specific markdown styling */
+    .arabic-text strong, [dir="rtl"] strong, [lang="ar"] strong {
+        font-weight: bold !important;
+        unicode-bidi: embed !important;
+    }
+    
+    .arabic-text ul, .arabic-text ol,
+    [dir="rtl"] ul, [dir="rtl"] ol,
+    [lang="ar"] ul, [lang="ar"] ol {
+        text-align: right !important;
+        direction: rtl !important;
+    }
+    
+    .arabic-text li, [dir="rtl"] li, [lang="ar"] li {
+        text-align: right !important;
+        direction: rtl !important;
+        unicode-bidi: embed !important;
+    }
+    
     /* Chat container optimization */
     [data-testid="chatMessage"] {
         max-width: 100% !important;
@@ -512,15 +633,11 @@ def chat_page():
     if not st.session_state.messages:
         with st.chat_message("assistant"):
             welcome_msg = 'Welcome to HR Support! I can answer questions about company policies, dress code, and HR-related matters. How can I assist you today?'
-            st.markdown(f'<div class="assistant-message" id="welcome-msg">{welcome_msg}</div>', unsafe_allow_html=True)
+            st.markdown(display_message("assistant", welcome_msg, "welcome-msg"), unsafe_allow_html=True)
             
     for i, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
-            class_name = "user-message" if message["role"] == "user" else "assistant-message"
-            msg_id = f"msg-{i}-{message['role']}"
-            style = get_message_style(message["content"])
-            safe_content = html.escape(message["content"])
-            st.markdown(f'<div class="{class_name}" id="{msg_id}" style="{style}">{safe_content}</div>', unsafe_allow_html=True)
+            st.markdown(display_message(message["role"], message["content"], f"msg-{i}-{message['role']}"), unsafe_allow_html=True)
     
     # Handle FAQ prompt with streaming
     if hasattr(st.session_state, 'faq_prompt') and st.session_state.faq_prompt:
@@ -532,68 +649,35 @@ def chat_page():
             
         # Display user message
         with st.chat_message("user"):
-            user_style = get_message_style(prompt)
-            safe_prompt = html.escape(prompt)
-            st.markdown(f'<div class="user-message" style="{user_style}">{safe_prompt}</div>', unsafe_allow_html=True)        
-        st.session_state.messages.append({"role": "user", "content": prompt})        
+            st.markdown(display_message("user", prompt), unsafe_allow_html=True)
+        st.session_state.messages.append({"role": "user", "content": prompt})
         
         # Display streaming assistant response
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
             with st.spinner("Thinking..."):
-                result = llm_client.chat(st.session_state.current_session_id, prompt, stream=True)
-                full_response = ""
-                response_id = f"streaming-response-{len(st.session_state.messages)}"
-                for chunk in result['stream']:
-                    full_response += chunk
-                    response_style = get_message_style(full_response)
-                    safe_response = html.escape(full_response)
-                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}" style="{response_style}">{safe_response + "▌"}</div>', unsafe_allow_html=True)
-                
-                # Final message without cursor
-                final_id = f"{response_id}-final"
-                final_style = get_message_style(full_response)
-                safe_final = html.escape(full_response)
-                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}" style="{final_style}">{safe_final}</div>', unsafe_allow_html=True)
+                full_response, _ = handle_streaming_response(llm_client, st.session_state.current_session_id, prompt, message_placeholder)
         
         st.session_state.messages.append({"role": "assistant", "content": full_response})
-        
-        if result['used_rag']:
-            logger.info(f"RAG used with similarity: {result['similarity_score']:.3f}")
         st.rerun()
 
     # Chat input
     if prompt := st.chat_input("Type your HR question here...", key=f"chat_input_{st.session_state.chat_input_key}"):
         if not st.session_state.current_session_id:
             create_new_session()
+        
+        # Display user message
         with st.chat_message("user"):
-            user_style = get_message_style(prompt)
-            safe_prompt2 = html.escape(prompt)
-            st.markdown(f'<div class="user-message" style="{user_style}">{safe_prompt2}</div>', unsafe_allow_html=True)        
-        st.session_state.messages.append({"role": "user", "content": prompt})        
+            st.markdown(display_message("user", prompt), unsafe_allow_html=True)
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # Display streaming assistant response
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
             with st.spinner("Thinking..."):
-                result = llm_client.chat(st.session_state.current_session_id, prompt, stream=True)
-                full_response = ""
-                response_id = f"chat-streaming-response-{len(st.session_state.messages)}"
-                for chunk in result['stream']:
-                    full_response += chunk
-                    response_style = get_message_style(full_response)
-                    safe_chat_response = html.escape(full_response)
-                    message_placeholder.markdown(f'<div class="assistant-message" id="{response_id}" style="{response_style}">{safe_chat_response + "▌"}</div>', unsafe_allow_html=True)
-                
-                # Final message without cursor
-                final_id = f"{response_id}-final"
-                final_style = get_message_style(full_response)
-                safe_chat_final = html.escape(full_response)
-                message_placeholder.markdown(f'<div class="assistant-message" id="{final_id}" style="{final_style}">{safe_chat_final}</div>', unsafe_allow_html=True)
-                
+                full_response, _ = handle_streaming_response(llm_client, st.session_state.current_session_id, prompt, message_placeholder)
         
         st.session_state.messages.append({"role": "assistant", "content": full_response})
-        
-        if result['used_rag']:
-            logger.info(f"RAG used with similarity: {result['similarity_score']:.3f}")
         st.rerun()
 def main():
     """Main application function."""
