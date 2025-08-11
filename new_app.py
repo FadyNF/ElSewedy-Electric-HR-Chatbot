@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import os
 import logging
 import html
+import re
 from datetime import datetime
 from dotenv import load_dotenv
 from llm_client import LLMClient
@@ -16,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 def is_arabic_text(text):
     """Check if text contains Arabic characters."""
-    import re
     arabic_pattern = re.compile(r'[\u0600-\u06FF]')
     return bool(arabic_pattern.search(text))
 
@@ -29,8 +29,6 @@ def get_message_style(text):
 
 def render_markdown_safely(content: str) -> str:
     """Render markdown safely while preserving Arabic text formatting."""
-    import re
-    
     # First, escape HTML to prevent XSS
     content = html.escape(content)
     
@@ -216,9 +214,8 @@ def initialize_session_state():
     if "faq_prompt" not in st.session_state:
         st.session_state.faq_prompt = None
 
-def create_new_session():
+def create_new_session(llm_client):
     """Create a new chat session."""
-    llm_client = get_llm_client()
     session_id = llm_client.create_session()
     st.session_state.current_session_id = session_id
     st.session_state.messages = []
@@ -226,9 +223,8 @@ def create_new_session():
     logger.info(f"Created new session: {session_id}")
     return session_id
 
-def load_session_messages(session_id: str):
+def load_session_messages(llm_client, session_id: str):
     """Load messages for a session."""
-    llm_client = get_llm_client()
     messages = llm_client.get_session_messages(session_id)
     
     # Convert to streamlit format
@@ -339,7 +335,8 @@ def home_page():
         
         # Start Chat button
         if st.button("Start Chat", key="start_chat"):
-            # Removed: create_new_session()
+            llm_client = get_llm_client()
+            create_new_session(llm_client)
             st.session_state.page = "chat"
             st.rerun()
     
@@ -578,11 +575,7 @@ def chat_page():
         """, unsafe_allow_html=True)
         
         if st.button("New Chat", type="primary", use_container_width=True):
-
-            
-            st.session_state.messages = []
-            st.session_state.current_session_id = None
-            st.session_state.chat_input_key += 1
+            create_new_session(llm_client)
             st.rerun()
         
         if st.button("Back to Home", type="secondary", use_container_width=True):
@@ -602,7 +595,7 @@ def chat_page():
             for i, faq in enumerate(faqs):
                 if st.button(faq, key=f"faq_{i}", use_container_width=True):
                     if not st.session_state.current_session_id:
-                        create_new_session()
+                        create_new_session(llm_client)
                     
                     # Set the FAQ as the current prompt for streaming
                     st.session_state.faq_prompt = faq
@@ -625,7 +618,7 @@ def chat_page():
                         st.button(f"{truncated_title} (Current)", key=f"current_{session_id}", disabled=True, type="primary", use_container_width=True)
                     else:
                         if st.button(truncated_title, key=f"select_{session_id}", type="secondary", use_container_width=True):
-                            load_session_messages(session_id)
+                            load_session_messages(llm_client, session_id)
                             st.rerun()
     # Main chat area
     st.markdown('<div class="chat-header"><h2>ASK HR!</h2></div>', unsafe_allow_html=True)
@@ -645,7 +638,7 @@ def chat_page():
         st.session_state.faq_prompt = None  # Clear the FAQ prompt
         
         if not st.session_state.current_session_id:
-            create_new_session()
+            create_new_session(llm_client)
             
         # Display user message
         with st.chat_message("user"):
@@ -664,7 +657,7 @@ def chat_page():
     # Chat input
     if prompt := st.chat_input("Type your HR question here...", key=f"chat_input_{st.session_state.chat_input_key}"):
         if not st.session_state.current_session_id:
-            create_new_session()
+            create_new_session(llm_client)
         
         # Display user message
         with st.chat_message("user"):

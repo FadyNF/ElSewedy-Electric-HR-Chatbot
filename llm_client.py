@@ -20,7 +20,7 @@ class LLMClient:
         self.api_key = os.getenv("API_KEY")
         self.model = os.getenv("MODEL", "gpt-4o")
         
-        # System prompt (maintainable string)
+        
         self.system_prompt = (
             "You are an HR Assistant for Elsewedy Electric, your primary role is to answer questions based on the provided company policies. When relevant policy context is available, use it to respond. If the context only contains references to other policies (like 'Refer to Policy X'), acknowledge the reference and ask the user to be more specific about what aspect of the policy they need help with. If no relevant context is provided for a specific question, state, I don't have that information in the provided policies. Always try to guide the user to an answer related to the HR policies that we have available. DO NOT USE external knowledge about Elsewedy or other companies not explicitly provided in the context. \n\n"
             "LANGUAGE HANDLING:\n\n"
@@ -55,7 +55,7 @@ class LLMClient:
             "٥. موافقة رئيس القطاع أو وحدة العمل  \n"
             "وبالنسبة للوظايف القيادية، محتاجين كمان موافقة الـ CHRO وCEO للمجموعة. \n\n"
         )     
-        # Initialize OpenAI client with streaming
+        # Initialize OpenAI client
         self.llm = ChatOpenAI(
             base_url="https://models.inference.ai.azure.com",
             api_key=self.api_key,
@@ -65,7 +65,7 @@ class LLMClient:
             streaming=True
         )
         
-        # Initialize RAG system
+        # Initialize rag
         self.rag_system = RAGSystem()
         
         # In-memory sessions: session_id -> {"title": str, "chain": ConversationalRetrievalChain}
@@ -146,14 +146,6 @@ Answer:"""
             logger.error(f"Error getting session messages: {e}")
             return []
 
-    def save_message(self, session_id: str, role: str, content: str, 
-                    rag_context: str = None, similarity_score: float = None):
-        """Save message - now handled automatically by LangChain memory."""
-        # This method is kept for compatibility but LangChain handles saving automatically
-        session = self.sessions.get(session_id)
-        if session:
-            session["updated_at"] = datetime.now()
-
     def list_sessions(self, limit: int = 5) -> List[Dict]:
         """List recent chat sessions."""
         items = [
@@ -167,36 +159,14 @@ Answer:"""
         items.sort(key=lambda x: x["updated_at"] or datetime.fromtimestamp(0), reverse=True)
         return items[:limit]
 
-    def delete_session(self, session_id: str) -> bool:
-        """Delete a chat session."""
-        return self.sessions.pop(session_id, None) is not None
-
     def update_session_title(self, session_id: str, title: str):
         """Update session title."""
         if session_id in self.sessions:
             self.sessions[session_id]["title"] = title
             self.sessions[session_id]["updated_at"] = datetime.now()
 
-    def _retry_with_fallback(self, chain, question: str, max_retries: int = 3) -> Generator[str, None, None]:
-        """Execute chain with retry logic and fallback."""
-        for attempt in range(max_retries):
-            try:
-                # Stream the response directly
-                for chunk in chain.stream({"question": question}):
-                    if "answer" in chunk:
-                        yield chunk["answer"]
-                
-                return  # Success, exit retry loop
-                
-            except Exception as e:
-                logger.error(f"Attempt {attempt + 1} failed: {e}")
-                if attempt == max_retries - 1:
-                    # Final attempt failed, yield error message
-                    yield "I apologize, but the model is currently unavailable. Please try again later."
-                    return
-
     def chat(self, session_id: str, user_message: str) -> Dict:
-        """Handle chat interaction with streaming (always)."""
+        """Handle chat interaction with streaming"""
         try:
             # Get or create session
             if session_id not in self.sessions:
@@ -205,18 +175,17 @@ Answer:"""
             session = self.sessions[session_id]
             chain = session["chain"]
             
-            # Update session title if it's the first message
+            # Update session title if first message
             memory_messages = chain.memory.chat_memory.messages
             if len(memory_messages) == 0:
                 title = user_message[:50] + ("..." if len(user_message) > 50 else "")
                 self.update_session_title(session_id, title)
             
-            # Create streaming generator with retry logic
+            # Create streaming generator
             def streaming_generator():
-                full_response = ""
-                for chunk in self._retry_with_fallback(chain, user_message):
-                    full_response += chunk
-                    yield chunk
+                for chunk in chain.stream({"question": user_message}):
+                    if "answer" in chunk:
+                        yield chunk["answer"]
                 
                 # Update session timestamp after completion
                 session["updated_at"] = datetime.now()

@@ -24,10 +24,10 @@ class RAGSystem:
         self.embeddings = HuggingFaceEmbeddings(model_name=self.embedding_model_name)
         
         # Chroma vector store
-        chroma_store_path = os.getenv("CHROMA_STORE_PATH", os.path.join(os.getcwd(), "chroma_store"))
+        chroma_store_path = os.getenv("CHROMA_STORE_PATH")
         logger.info(f"Initializing Chroma at: {chroma_store_path}")
         
-        # Initialize or load existing vector store
+        # load existing vector store
         if os.path.exists(chroma_store_path) and os.listdir(chroma_store_path):
             self.vectorstore = Chroma(
                 persist_directory=chroma_store_path,
@@ -51,6 +51,16 @@ class RAGSystem:
         
         text = re.sub(r'\s+', ' ', text.strip())
         
+        # Length and word count filters
+        if len(text) < 200 or len(text.split()) < 20:
+            return ""
+        
+        # Skip chunks that are mostly fragmented words
+        words = text.split()
+        short_words = sum(1 for word in words if len(word) < 3)
+        if short_words / len(words) > 0.5:  # More than 50% very short words
+            return ""
+        
         # Quick filters - return early if junk detected
         junk_patterns = [
             r'[A-Z]\s+[A-Z]\s+[A-Z]',                          # Spaced letters
@@ -66,7 +76,7 @@ class RAGSystem:
                 return ""
         
         # Filter by special character ratio
-        if len(re.findall(r'[^\w\s\u0600-\u06FF]', text)) / len(text) > 0.4:
+        if len(re.findall(r'[^\w\s\u0600-\u06FF]', text)) / len(text) > 0.3:
             return ""
         
         # Clean and return
@@ -84,7 +94,8 @@ class RAGSystem:
                 strategy="hi_res", 
                 hi_res_model_name="yolox",
                 pdf_infer_table_structure=True,
-                languages=["ara", "eng"],  # Arabic + English OCR
+                extract_images_in_pdf=True,
+                languages=["ara", "eng"], 
             )
             
             elements = loader.load()
@@ -94,7 +105,7 @@ class RAGSystem:
             table_elements = [el for el in elements if el.metadata.get('category') == 'Table']
             text_elements = [el for el in elements if el.metadata.get('category') != 'Table']
             
-            # Manual cleaning and filtering of text elements
+            # Clean text 
             cleaned_texts = []
             for element in text_elements:
                 cleaned_content = self.clean_and_filter_text(element.page_content)
@@ -114,26 +125,17 @@ class RAGSystem:
             merged_text = "\n\n".join(cleaned_texts)
             logger.info(f"Merged text length: {len(merged_text)} characters")
             # Apply text splitter for final chunking
-            final_chunks = self.text_splitter.split_text(merged_text)
+            split_chunks = self.text_splitter.split_text(merged_text)
+            
+            # Filter chunks again after splitting (splitting might create junk chunks)
+            final_chunks = []
+            for chunk in split_chunks:
+                cleaned_chunk = self.clean_and_filter_text(chunk)
+                if cleaned_chunk:
+                    final_chunks.append(cleaned_chunk)
             
             # Add table chunks
             final_chunks.extend(table_chunks)
-            
-            # Filter out garbage chunks and improve quality
-            quality_chunks = []
-            for chunk in final_chunks:
-                chunk = chunk.strip()
-                # Skip very short chunks or chunks with too little content
-                if len(chunk) < 200 or len(chunk.split()) < 20:
-                    continue
-                # Skip chunks that are mostly fragmented words
-                words = chunk.split()
-                short_words = sum(1 for word in words if len(word) < 3)
-                if short_words / len(words) > 0.5:  # More than 50% very short words
-                    continue
-                quality_chunks.append(chunk)
-            
-            final_chunks = quality_chunks
 
             logger.info(f"Created {len(final_chunks)} final chunks from {os.path.basename(file_path)}")
             
@@ -176,7 +178,7 @@ class RAGSystem:
             return
         
         # Create vector store from all chunks
-        chroma_store_path = os.getenv("CHROMA_STORE_PATH", os.path.join(os.getcwd(), "chroma_store"))
+        chroma_store_path = os.getenv("CHROMA_STORE_PATH")
         self.vectorstore = Chroma.from_texts(
             texts=all_chunks,
             embedding=self.embeddings,
