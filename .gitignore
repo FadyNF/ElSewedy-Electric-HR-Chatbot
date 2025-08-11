@@ -1,7 +1,8 @@
 .env
-**/figures/
 **/chroma_store/
-ycache__/
+**/figures/
+**/__pycache__/
 config.env
 logo.png 
 knowledge_base/ 
+**/__pycache__/
