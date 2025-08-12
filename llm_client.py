@@ -211,7 +211,7 @@ class LLMClient:
                     if "answer" in chunk:
                         yield chunk["answer"]
                 
-                # Update session timestamp after completion
+                # Update  timestamp after completion
                 session["updated_at"] = datetime.now()
             
             return {
