@@ -4,21 +4,69 @@ import logging
 from typing import Dict, Generator, List
 from datetime import datetime
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from langchain.chains import ConversationalRetrievalChain
+from openai import OpenAI
 from langchain.memory import ConversationBufferMemory
-from langchain.prompts import PromptTemplate
+from langchain.chains import ConversationalRetrievalChain
+from langchain.llms.base import LLM
+from langchain.callbacks.manager import CallbackManagerForLLMRun
+from pydantic import BaseModel, Field
+from typing import Optional, Any
+
+
 from rag_system import RAGSystem
 load_dotenv("config.env")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# Simple LLM wrapper
+class LLMmodel(LLM, BaseModel):
+    client: Any = Field(default=None)
+    model: str = Field(default="Qwen/Qwen3-8B")
+    system_prompt: str = Field(default="")
+   
+    def __init__(self, **data):
+        super().__init__(**data)
+        if self.client is None:
+            self.client = OpenAI(
+                base_url="https://router.huggingface.co/v1",
+                api_key=data.get("api_key", ""),
+            )
+ 
+    @property
+    def _llm_type(self) -> str:
+        return "direct_openai"
+ 
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> str:
+        try:
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": prompt}
+            ]
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=0.1,
+                top_p=0.9,
+                max_tokens=8000,
+            ).choices[0].message.content.strip()
+            
+            return response
+        except Exception as e:
+            raise ValueError(f"Error calling OpenAI API: {str(e)}")
+
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model": self.model}
+
+
 class LLMClient:
     """Streamlined LLM Client using LangChain ConversationalRetrievalChain.""" 
     def __init__(self):
         # LLM Configuration
-        self.api_key = os.getenv("API_KEY")
-        self.model = os.getenv("MODEL", "gpt-4o")
+        self.api_key = os.getenv("HF_TOKEN")  
+        self.model = os.getenv("MODEL", "Qwen/Qwen3-8B")
         
         
         self.system_prompt = (
@@ -55,42 +103,21 @@ class LLMClient:
             "٥. موافقة رئيس القطاع أو وحدة العمل  \n"
             "وبالنسبة للوظايف القيادية، محتاجين كمان موافقة الـ CHRO وCEO للمجموعة. \n\n"
         )     
-        # Initialize OpenAI client
-        self.llm = ChatOpenAI(
-            base_url="https://models.inference.ai.azure.com",
+        # Initialize LLM
+        self.llm = LLMmodel(
             api_key=self.api_key,
             model=self.model,
-            temperature=0.1,
-            max_tokens=2000,
-            streaming=True
+            system_prompt=self.system_prompt
         )
         
         # Initialize rag
         self.rag_system = RAGSystem()
         
-        # In-memory sessions: session_id -> {"title": str, "chain": ConversationalRetrievalChain}
+        # In-memory sessions: session_id -> {"title": str, "chain": ConversationalRetrievalChain, "updated_at": datetime}
         self.sessions: Dict[str, Dict] = {}
 
-    def _get_prompt_template(self):
-        """Get the prompt template with system prompt."""
-        template = f"""{self.system_prompt}
-
-Context from company policies:
-{{context}}
-
-Chat History:
-{{chat_history}}
-
-Question: {{question}}
-Answer:"""
-        
-        return PromptTemplate(
-            input_variables=["context", "chat_history", "question"],
-            template=template
-        )
-
     def create_session(self, title: str = None) -> str:
-        """Create a new chat session with its own conversation chain."""
+        """Create a new chat session with LangChain memory."""
         session_id = str(uuid.uuid4())
         
         if not title:
@@ -103,15 +130,12 @@ Answer:"""
             output_key="answer"
         )
         
-        # Create conversation chain for this session
+        
         chain = ConversationalRetrievalChain.from_llm(
             llm=self.llm,
             retriever=self.rag_system.get_retriever(),
             memory=memory,
-            return_source_documents=False,  # No citations needed
-            combine_docs_chain_kwargs={
-                "prompt": self._get_prompt_template()
-            }
+            return_source_documents=True,
         )
         
         self.sessions[session_id] = {
@@ -124,14 +148,14 @@ Answer:"""
         return session_id
 
     def get_session_messages(self, session_id: str, limit: int = 50) -> List[Dict]:
-        """Get messages for a session from memory."""
+        """Get messages for a session from LangChain memory."""
         session = self.sessions.get(session_id)
         if not session:
             return []
         
         try:
             memory = session["chain"].memory
-            messages = memory.chat_memory.messages[-limit * 2:]  # *2 because we have user+assistant pairs
+            messages = memory.chat_memory.messages[-limit * 2:]
             
             result = []
             for i in range(0, len(messages), 2):
@@ -141,7 +165,7 @@ Answer:"""
                     result.append({"role": "user", "content": user_msg.content})
                     result.append({"role": "assistant", "content": assistant_msg.content})
             
-            return result[-limit:]  # Final limit
+            return result[-limit:]
         except Exception as e:
             logger.error(f"Error getting session messages: {e}")
             return []
@@ -166,7 +190,7 @@ Answer:"""
             self.sessions[session_id]["updated_at"] = datetime.now()
 
     def chat(self, session_id: str, user_message: str) -> Dict:
-        """Handle chat interaction with streaming"""
+        """Handle chat interactions"""
         try:
             # Get or create session
             if session_id not in self.sessions:
@@ -181,7 +205,7 @@ Answer:"""
                 title = user_message[:50] + ("..." if len(user_message) > 50 else "")
                 self.update_session_title(session_id, title)
             
-            # Create streaming generator
+            # stream messages
             def streaming_generator():
                 for chunk in chain.stream({"question": user_message}):
                     if "answer" in chunk:
@@ -192,8 +216,8 @@ Answer:"""
             
             return {
                 'stream': streaming_generator(),
-                'used_rag': True,  # Always true with ConversationalRetrievalChain
-                'similarity_score': 1.0  # LangChain handles retrieval internally
+                'used_rag': True,  
+                'similarity_score': 1.0  
             }
             
         except Exception as e:

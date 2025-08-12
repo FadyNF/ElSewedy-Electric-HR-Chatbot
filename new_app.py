@@ -188,9 +188,8 @@ def inject_arabic_formatting_script():
     """
     components.html(script, height=0)
 
-def setup_logo():
-    """Setup logo file for the application."""
-    return "logo.png" if os.path.exists("logo.png") else None
+# Logo setup removed for performance - hardcoded path
+LOGO_PATH = "logo.png" if os.path.exists("logo.png") else None
 
 # Initialize components
 @st.cache_resource
@@ -206,20 +205,27 @@ def initialize_session_state():
         st.session_state.messages = []
     if 'current_session_id' not in st.session_state:
         st.session_state.current_session_id = None
-
     if "page" not in st.session_state:
         st.session_state.page = "home"
     if "chat_input_key" not in st.session_state:
         st.session_state.chat_input_key = 0
     if "faq_prompt" not in st.session_state:
         st.session_state.faq_prompt = None
+    
+    # Initialize LLM client once at startup
+    if 'llm_client' not in st.session_state:
+        st.session_state.llm_client = get_llm_client()
+    
+
 
 def create_new_session(llm_client):
-    """Create a new chat session."""
+    """Create a new chat session"""
     session_id = llm_client.create_session()
     st.session_state.current_session_id = session_id
     st.session_state.messages = []
     st.session_state.chat_input_key += 1
+    # Refresh cached sessions
+    st.session_state.cached_sessions = llm_client.list_sessions()
     logger.info(f"Created new session: {session_id}")
     return session_id
 
@@ -240,7 +246,7 @@ def load_session_messages(llm_client, session_id: str):
 
 def home_page():
     """Homepage with ElSewedy Electric branding."""
-    logo_path = setup_logo()
+    logo_path = LOGO_PATH
     
     st.markdown("""
     <style>
@@ -335,21 +341,16 @@ def home_page():
         
         # Start Chat button
         if st.button("Start Chat", key="start_chat"):
-            llm_client = get_llm_client()
-            create_new_session(llm_client)
             st.session_state.page = "chat"
-            st.rerun()
     
     # Footer
     st.markdown('<div class="footer-text">&copy; 2025 ELSEWEDY ELECTRIC – All rights reserved.</div>', unsafe_allow_html=True)
 
 def chat_page():
     """Chat page with full UI functionality."""
-    logo_path = setup_logo()
-    llm_client = get_llm_client()
+    logo_path = LOGO_PATH
+    llm_client = st.session_state.llm_client
     
-    # Inject Arabic formatting script
-    inject_arabic_formatting_script()
     
     # Optimized message styles with enhanced Arabic alignment
     st.markdown("""
@@ -576,11 +577,9 @@ def chat_page():
         
         if st.button("New Chat", type="primary", use_container_width=True):
             create_new_session(llm_client)
-            st.rerun()
         
         if st.button("Back to Home", type="secondary", use_container_width=True):
             st.session_state.page = "home"
-            st.rerun()
         
         st.markdown("<hr>", unsafe_allow_html=True)
         
@@ -594,21 +593,17 @@ def chat_page():
             ]
             for i, faq in enumerate(faqs):
                 if st.button(faq, key=f"faq_{i}", use_container_width=True):
-                    if not st.session_state.current_session_id:
-                        create_new_session(llm_client)
-                    
                     # Set the FAQ as the current prompt for streaming
                     st.session_state.faq_prompt = faq
-                    st.rerun()
 
         # Chat History expander
         with st.expander("Chat History", expanded=False):
-            sessions = llm_client.list_sessions()
-            if not sessions:
-                st.write("No chat history yet")
-            else:
-                sorted_sessions = sorted(sessions, key=lambda x: x['updated_at'], reverse=True)
-                for i, session in enumerate(sorted_sessions):
+            if 'chat_history_loaded' not in st.session_state:
+                st.session_state.cached_sessions = llm_client.list_sessions()
+                st.session_state.chat_history_loaded = True
+            
+            if st.session_state.cached_sessions:
+                for i, session in enumerate(st.session_state.cached_sessions):
                     session_id = session['id']
                     title = session['title']
                     truncated_title = (title[:45] + '...') if len(title) > 45 else title
@@ -619,9 +614,15 @@ def chat_page():
                     else:
                         if st.button(truncated_title, key=f"select_{session_id}", type="secondary", use_container_width=True):
                             load_session_messages(llm_client, session_id)
-                            st.rerun()
+            else:
+                st.write("No chat history yet")
     # Main chat area
     st.markdown('<div class="chat-header"><h2>ASK HR!</h2></div>', unsafe_allow_html=True)
+    # Only create session if needed 
+    if st.session_state.current_session_id is None:
+        st.session_state.current_session_id = st.session_state.llm_client.create_session()
+        st.session_state.messages = []
+    
     # Display messages with proper formatting
     if not st.session_state.messages:
         with st.chat_message("assistant"):
@@ -636,9 +637,6 @@ def chat_page():
     if hasattr(st.session_state, 'faq_prompt') and st.session_state.faq_prompt:
         prompt = st.session_state.faq_prompt
         st.session_state.faq_prompt = None  # Clear the FAQ prompt
-        
-        if not st.session_state.current_session_id:
-            create_new_session(llm_client)
             
         # Display user message
         with st.chat_message("user"):
@@ -652,13 +650,9 @@ def chat_page():
                 full_response, _ = handle_streaming_response(llm_client, st.session_state.current_session_id, prompt, message_placeholder)
         
         st.session_state.messages.append({"role": "assistant", "content": full_response})
-        st.rerun()
 
     # Chat input
     if prompt := st.chat_input("Type your HR question here...", key=f"chat_input_{st.session_state.chat_input_key}"):
-        if not st.session_state.current_session_id:
-            create_new_session(llm_client)
-        
         # Display user message
         with st.chat_message("user"):
             st.markdown(display_message("user", prompt), unsafe_allow_html=True)
@@ -671,7 +665,10 @@ def chat_page():
                 full_response, _ = handle_streaming_response(llm_client, st.session_state.current_session_id, prompt, message_placeholder)
         
         st.session_state.messages.append({"role": "assistant", "content": full_response})
-        st.rerun()
+        
+        # Update session cache after new message
+        if 'cached_sessions' in st.session_state:
+            st.session_state.cached_sessions = llm_client.list_sessions()
 def main():
     """Main application function."""
     st.set_page_config(
@@ -680,9 +677,14 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded"  
     )    
-    # Setup logo and initialize session state
-    setup_logo()
-    initialize_session_state()    
+    # Initialize session state
+    initialize_session_state()
+    
+    # Inject Arabic formatting script once at startup
+    if 'arabic_script_injected' not in st.session_state:
+        inject_arabic_formatting_script()
+        st.session_state.arabic_script_injected = True
+    
     # Route to appropriate page
     if st.session_state.page == "chat":
         chat_page()
