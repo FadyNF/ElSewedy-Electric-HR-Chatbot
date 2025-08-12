@@ -87,17 +87,19 @@ class RAGSystem:
 
         logger.info(f"Processing {len(processed_documents)} documents for embedding...")
 
-        # Create vector store from all document chunks
+        # Create vector store from all document chunks if it doesnt exist only.
         chroma_store_path = os.getenv("CHROMA_STORE_PATH")
-        # self.vectorstore = Chroma.from_texts(
-        #     texts=processed_documents,
-        #     embedding=self.embeddings,
-        #     metadatas=processed_metadatas,
-        #     persist_directory=chroma_store_path,
-        #     collection_name="knowledge_base"
-        # )
-        
-        # logger.info(f"Successfully built index with {len(processed_documents)} document chunks")
+
+        if not chroma_store_path:
+            self.vectorstore = Chroma.from_texts(
+                texts=processed_documents,
+                embedding=self.embeddings,
+                metadatas=processed_metadatas,
+                persist_directory=chroma_store_path,
+                collection_name="knowledge_base"
+            )
+            logger.info(f"Successfully built index with {len(processed_documents)} document chunks")
+
 
     def ensure_index_exists(self) -> bool:
         """Ensure the vector store exists, rebuild if necessary."""
