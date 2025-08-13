@@ -10,4 +10,6 @@ langchain-unstructured>=0.1.0
 langchain-huggingface>=0.1.0
 transformers>=4.35.0
 Pillow>=9.0.0
-click>=8.0.0 
+click>=8.0.0
+ibm-watsonx-ai>=1.1.17
+langchain-ibm>=0.2.1 

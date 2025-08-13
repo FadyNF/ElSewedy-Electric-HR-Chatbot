@@ -4,14 +4,13 @@ import logging
 from typing import Dict, Generator, List
 from datetime import datetime
 from dotenv import load_dotenv
-from openai import OpenAI
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.llms.base import LLM
 from langchain.callbacks.manager import CallbackManagerForLLMRun
 from pydantic import BaseModel, Field
 from typing import Optional, Any
-
+from langchain_ibm import WatsonxLLM
 
 from rag_system import RAGSystem
 load_dotenv("config.env")
@@ -22,51 +21,49 @@ logger = logging.getLogger(__name__)
 # Simple LLM wrapper
 class LLMmodel(LLM, BaseModel):
     client: Any = Field(default=None)
-    model: str = Field(default="Qwen/Qwen3-8B")
+    model: str = Field(default="sdaia/allam-1-13b-instruct")
     system_prompt: str = Field(default="")
    
     def __init__(self, **data):
         super().__init__(**data)
-        if self.client is None:
-            self.client = OpenAI(
-                base_url="https://router.huggingface.co/v1",
-                api_key=data.get("api_key", ""),
-            )
- 
+
+        self.client = WatsonxLLM(
+            model_id=self.model,
+            url="https://eu-de.ml.cloud.ibm.com",
+            project_id=os.getenv("WATSONX_PROJECT_ID"),
+            params={
+                "temperature": 0.1,
+                "max_new_tokens": 1024,
+                "top_p": 0.9,
+                "top_k": 50,
+                "repetition_penalty": 1.1
+            }
+        )
+
     @property
     def _llm_type(self) -> str:
-        return "direct_openai"
+        return "ibm_watsonx"
  
     def _call(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> str:
         try:
-            messages = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": prompt}
-            ]
+            # Combine system prompt with user prompt
+            full_prompt = f"{self.system_prompt}\n\nUser: {prompt}\n\nAssistant:"
             
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.1,
-                top_p=0.9,
-                max_tokens=8000,
-            ).choices[0].message.content.strip()
             
-            return response
+            response = self.client.invoke(full_prompt)
+            return response.strip()
+            
         except Exception as e:
-            raise ValueError(f"Error calling OpenAI API: {str(e)}")
+            raise ValueError(f"Error calling IBM WatsonX API: {str(e)}")
 
-    @property
-    def _identifying_params(self) -> Dict[str, Any]:
-        return {"model": self.model}
 
 
 class LLMClient:
     """Streamlined LLM Client using LangChain ConversationalRetrievalChain.""" 
     def __init__(self):
         # LLM Configuration
-        self.api_key = os.getenv("HF_TOKEN")  
-        self.model = os.getenv("MODEL", "Qwen/Qwen3-8B")
+        self.api_key = os.getenv("WATSONX_APIKEY")  
+        self.model = os.getenv("MODEL")
         
         
         self.system_prompt = (
